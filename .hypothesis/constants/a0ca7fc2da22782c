@@ -1,0 +1,4 @@
+# file: /Volumes/workplace/personal/mani-fashion-backend/agentic_pattern_engine/dxf_exporter.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.5, 1.0, 1.5, 2.0, 256, ':', 'Back Bodice', 'DASHED', 'DT', 'DT:', 'Front Bodice', 'GL', 'LB', 'LB:', 'LINE', 'LWPOLYLINE', 'MANI_ITER_COUNT', 'MANI_PROFILE_HASH', 'MANI_RUN_ID', 'MANI_SLOPER_META', 'MANI_STATUS', 'NM', 'OL', 'POINT', 'R2010', 'SA', 'SA:', 'SL', 'TEXT', '_bodice', 'back_bodice', 'bust_ease', 'chest', 'color', 'dart', 'dxf_parse', 'front_bodice', 'grain', 'height', 'hip', 'insert', 'label', 'layer', 'linetype', 'notch', 'outline', 'parsed', 'profile', 'seam', 'seam_allowance', 'shoulder_width', 'sloper_id', 'source', 'torso_length', 'waist', 'waist_ease', 'xy']
