@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "agentic-pattern-engine"
+version = "0.1.0"
+description = "Autonomous bodice sloper self-correction loop for the MANI platform"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "ezdxf>=0.18",
+    "reportlab>=4.0",
+    "trimesh>=4.0",
+    # --- Libraries requiring manual / special installation ---
+    # pygarment          — parametric sewing pattern DSL (GarmentCode); install from source
+    # smplx              — SMPL-X body model; install via `pip install smplx` + download model files
+    # flexismpl          — measurements → SMPL shape params; install from source
+    # nvidia-warp        — GPU cloth simulation; `pip install warp-lang` (requires CUDA)
+    # taichi             — alternative GPU simulation; `pip install taichi` (optional)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "hypothesis>=6.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
