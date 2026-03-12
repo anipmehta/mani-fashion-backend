@@ -148,10 +148,19 @@ def generate_visualization(
                 "threshold": round(fi.threshold, 1),
             })
 
+        # Use re-computed stress total (not audit trail's 0.0 for iter 0)
+        computed_total = sum(
+            max(0.0, regional.get(fi_region, 0.0) - getattr(thresholds, fi_region, 500.0))
+            for fi_region in ("bust", "waist", "shoulder", "armhole",
+                              "side_seam", "center_front", "center_back")
+        )
+        display_total = round(computed_total, 1) if entry.iteration == 0 else round(entry.total_stress_magnitude, 1)
+
         iterations_data.append({
             "iteration": entry.iteration,
             "stresses": [round(s, 2) for s in vertex_stresses],
-            "total_stress": round(entry.total_stress_magnitude, 1),
+            "total_stress": display_total,
+            "regional_stresses": {k: round(v, 1) for k, v in regional.items()},
             "fit_issues": issues,
             "bust_ease": round(sloper.bust_ease, 2),
             "waist_ease": round(sloper.waist_ease, 2),
@@ -237,6 +246,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     &nbsp;|&nbsp; Corrections: <b id="n-corr">0</b>
   </div>
   <input type="range" id="slider" min="0" max="0" value="0">
+  <div id="stress-delta" style="font-size:12px; margin:2px 0;"></div>
+  <div id="regional" style="font-size:11px; opacity:0.8; width:100%;"></div>
   <div id="issues"></div>
 </div>
 
@@ -312,27 +323,38 @@ const gWireMesh = new THREE.LineSegments(gWire, new THREE.LineBasicMaterial({
 }));
 scene.add(gWireMesh);
 
-function stressToColor(stress, maxS) {
-  const t = Math.min(stress / Math.max(maxS, 1), 1.0);
+function stressToColor(stress, maxS, minS) {
+  // Normalize to [0,1] using the actual stress range for better contrast
+  const range = Math.max(maxS - minS, 1);
+  const t = Math.min(Math.max((stress - minS) / range, 0), 1.0);
   let r, g, b;
   if (t < 0.5) {
-    // green -> yellow
     r = t * 2; g = 1.0; b = 0;
   } else {
-    // yellow -> red
     r = 1.0; g = 1.0 - (t - 0.5) * 2; b = 0;
   }
   return [r, g, b];
 }
 
+// Precompute per-iteration min/max stress for better color contrast
+const iterMinMax = DATA.iterations.map(it => {
+  const vals = it.stresses.filter(s => s > 0);
+  return {
+    min: vals.length ? Math.min(...vals) : 0,
+    max: vals.length ? Math.max(...vals) : 1
+  };
+});
+// Global min/max across all iterations
+const globalMin = Math.min(...iterMinMax.map(m => m.min));
+const globalMax = Math.max(...iterMinMax.map(m => m.max));
+
 function showIteration(idx) {
   const it = DATA.iterations[idx];
   if (!it) return;
 
-  const maxS = DATA.max_stress || 500;
   const colors = garmentGeom.attributes.color.array;
   for (let i = 0; i < it.stresses.length; i++) {
-    const [r, g, b] = stressToColor(it.stresses[i], maxS);
+    const [r, g, b] = stressToColor(it.stresses[i], globalMax, globalMin);
     colors[i*3] = r; colors[i*3+1] = g; colors[i*3+2] = b;
   }
   garmentGeom.attributes.color.needsUpdate = true;
@@ -351,6 +373,29 @@ function showIteration(idx) {
       '<div>⚠ ' + fi.region + ': ' + fi.type + ' (' + fi.stress + ' Pa, threshold ' + fi.threshold + ' Pa)</div>'
     ).join('');
   }
+
+  // Stress delta from previous iteration
+  const deltaDiv = document.getElementById('stress-delta');
+  if (idx > 0) {
+    const prev = DATA.iterations[idx-1];
+    const delta = it.total_stress - prev.total_stress;
+    const sign = delta <= 0 ? '↓' : '↑';
+    const color = delta <= 0 ? '#69f0ae' : '#ff5252';
+    deltaDiv.innerHTML = '<span style="color:'+color+'">'+sign+' '+Math.abs(delta).toFixed(1)+' Pa from previous iteration</span>';
+  } else {
+    deltaDiv.innerHTML = '<span style="opacity:0.5">Initial sloper (pre-simulation baseline)</span>';
+  }
+
+  // Regional stress breakdown
+  const regDiv = document.getElementById('regional');
+  if (it.regional_stresses) {
+    const parts = Object.entries(it.regional_stresses).map(([k,v]) => {
+      const pct = Math.min(v / Math.max(DATA.max_stress,1) * 100, 100);
+      const c = pct < 33 ? '#69f0ae' : pct < 66 ? '#ffeb3b' : '#ff5252';
+      return '<span style="color:'+c+'">'+k+': '+v+'Pa</span>';
+    });
+    regDiv.innerHTML = parts.join(' · ');
+  }
 }
 
 // Slider
@@ -358,6 +403,7 @@ const slider = document.getElementById('slider');
 slider.max = DATA.iterations.length - 1;
 document.getElementById('iter-max').textContent = DATA.iterations.length - 1;
 document.getElementById('max-label').textContent = (DATA.max_stress || 500) + ' Pa';
+document.getElementById('max-label').textContent = Math.round(globalMax) + ' Pa';
 slider.addEventListener('input', () => showIteration(parseInt(slider.value)));
 
 // Camera
