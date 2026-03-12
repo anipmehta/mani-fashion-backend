@@ -138,29 +138,6 @@ def _compute_dart_lines_3d(
     results: list[dict] = []
     torso_length = profile.torso_length
 
-    # Compute the bust point 3D position for directing waist dart legs upward.
-    # Front bust dart is darts[0]; map its apex to 3D to get the target.
-    bust_dart = sloper.front_bodice.darts[0] if sloper.front_bodice.darts else None
-    bust_pt_3d: np.ndarray | None = None
-    if bust_dart is not None:
-        front_width_2d = (
-            sloper.front_bodice.outline[2].x
-            if len(sloper.front_bodice.outline) > 2
-            else 10.0
-        )
-        bd_frac_top = min(max(-bust_dart.apex.y / torso_length, 0.0), 1.0)
-        bd_ring = int(round((1.0 - bd_frac_top) * (n_rings - 1)))
-        bd_ring = max(0, min(bd_ring, n_rings - 1))
-        bd_x_frac = (
-            min(max(bust_dart.apex.x / front_width_2d, 0.0), 1.0)
-            if front_width_2d > 0
-            else 0.5
-        )
-        bd_vert = int(round(bd_x_frac * (pts_per_ring // 4)))
-        bd_vi = bd_ring * pts_per_ring + max(0, min(bd_vert, pts_per_ring - 1))
-        if bd_vi < len(garment_verts):
-            bust_pt_3d = np.array(garment_verts[bd_vi])
-
     for side, piece, labels in [
         ("front", sloper.front_bodice, ["Front bust dart", "Front waist dart"]),
     ]:
@@ -168,10 +145,16 @@ def _compute_dart_lines_3d(
         for di, dart in enumerate(piece.darts):
             label = labels[di] if di < len(labels) else f"{side} dart {di+1}"
 
-            # Map 2D apex y to ring index
+            # Map 2D apex y to 3D ring index.
+            # 2D pattern: y=0 at neckline (top), y=-torso_length at waist (bottom).
+            # 3D body rings: 0=hip, 1=waist, 2=bust, 3=shoulder.
+            # A bodice covers shoulder-to-waist, so map 2D range onto
+            # rings [n_rings-1 .. 1] (shoulder..waist), never hip ring 0.
             frac_from_top = min(max(-dart.apex.y / torso_length, 0.0), 1.0)
-            ring_idx = int(round((1.0 - frac_from_top) * (n_rings - 1)))
-            ring_idx = max(0, min(ring_idx, n_rings - 1))
+            ring_idx = int(round(
+                (n_rings - 1) - frac_from_top * (n_rings - 2)
+            ))
+            ring_idx = max(1, min(ring_idx, n_rings - 1))
 
             # Map 2D apex x to angular position within the ring
             # Front: CF=vertex 0, side seam=pts_per_ring//4
@@ -299,11 +282,12 @@ def generate_visualization(
     # For CF/CB/side seams we want perfectly straight vertical lines.
     # Use the outermost (bust) ring radius at the correct angle for each seam.
     def _straight_seam_coords(vert_indices: list[int]) -> list[list[float]]:
-        """Return straight vertical line coords using the angular position
-        from the widest ring but keeping x/z constant across all y-levels."""
-        # Find the ring with the largest radius (bust ring, typically ring 2)
-        max_r_idx = 0
+        """Return straight vertical line coords at the angular position of
+        the given vertices, offset outward to sit on the garment surface.
+        Uses the widest ring's radius + garment offset for a straight line."""
+        # Find the ring with the largest radius (bust ring)
         max_r = 0.0
+        max_r_idx = 0
         for vi in vert_indices:
             pt = body_verts[vi]
             r = math.sqrt(pt[0] ** 2 + pt[2] ** 2)
@@ -311,7 +295,15 @@ def generate_visualization(
                 max_r = r
                 max_r_idx = vi
         ref_pt = body_verts[max_r_idx]
-        ref_x, ref_z = ref_pt[0], ref_pt[2]
+        # Compute the angular direction and apply garment offset
+        ref_r = math.sqrt(ref_pt[0] ** 2 + ref_pt[2] ** 2)
+        if ref_r > 1e-6:
+            nx, nz = ref_pt[0] / ref_r, ref_pt[2] / ref_r
+        else:
+            nx, nz = 1.0, 0.0
+        garment_r = ref_r + _BASE_GARMENT_OFFSET + 0.3  # slight extra to sit on cloth
+        ref_x = nx * garment_r
+        ref_z = nz * garment_r
         coords = []
         for vi in vert_indices:
             pt = body_verts[vi]
@@ -395,8 +387,6 @@ def generate_visualization(
 
         front_darts = [{"angle": round(d.angle, 2), "length": round(d.length, 2)}
                        for d in sloper.front_bodice.darts]
-        back_darts = [{"angle": round(d.angle, 2), "length": round(d.length, 2)}
-                      for d in sloper.back_bodice.darts]
 
         dart_lines_3d = _compute_dart_lines_3d(
             sloper, garment_verts, n_rings, pts_per_ring,
@@ -414,7 +404,6 @@ def generate_visualization(
             "waist_ease": round(sloper.waist_ease, 2),
             "n_corrections": len(entry.corrections_applied),
             "front_darts": front_darts,
-            "back_darts": back_darts,
             "dart_lines_3d": dart_lines_3d,
         })
 
@@ -669,7 +658,6 @@ const globalMin = Math.min(...iterMinMax.map(m => m.min));
 const globalMax = Math.max(...iterMinMax.map(m => m.max));
 
 const initFrontDarts = DATA.iterations[0].front_darts;
-const initBackDarts = DATA.iterations[0].back_darts;
 
 // --- Seam lines ---
 const SEAM_OFFSET = 0.15;
@@ -874,15 +862,6 @@ function showIteration(idx) {
     const ds = delta > 0.01 ? '<span class="ease-change">+' + delta.toFixed(1) + '°</span>' : '';
     const bw = Math.min(d.angle / 40 * 120, 120);
     h += '<div class="dart-row"><span class="dart-label">'+label+'</span>' +
-      '<span class="dart-val">'+d.angle.toFixed(1)+'° × '+d.length.toFixed(1)+'cm'+ds+'</span></div>' +
-      '<div class="dart-bar-bg"><div class="dart-bar" style="width:'+bw+'px"></div></div>';
-  });
-  it.back_darts.forEach((d, i) => {
-    const init = initBackDarts[i] ? initBackDarts[i].angle : d.angle;
-    const delta = d.angle - init;
-    const ds = delta > 0.01 ? '<span class="ease-change">+' + delta.toFixed(1) + '°</span>' : '';
-    const bw = Math.min(d.angle / 40 * 120, 120);
-    h += '<div class="dart-row"><span class="dart-label">Back dart '+(i+1)+'</span>' +
       '<span class="dart-val">'+d.angle.toFixed(1)+'° × '+d.length.toFixed(1)+'cm'+ds+'</span></div>' +
       '<div class="dart-bar-bg"><div class="dart-bar" style="width:'+bw+'px"></div></div>';
   });
