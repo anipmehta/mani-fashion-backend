@@ -137,18 +137,29 @@ def _compute_dart_lines_3d(
     Bust dart (di=0): apex at bust level, legs point DOWN toward waist.
     Waist dart (di=1): apex near waist hem, legs point UP toward bust.
 
-    Coordinate mapping (from body_model_builder):
-      vertex 0 in each ring  → theta=0   → CF  (+x, z=0)
-      vertex pts_per_ring//4 → theta=90  → side seam
-      vertex pts_per_ring//2 → theta=180 → CB
+    Uses sub-vertex interpolation so that small angle changes between
+    iterations produce visibly different V-line spreads.
+
     Ring layout: 0=hip, 1=waist, 2=bust, 3=shoulder.
     """
     results: list[dict] = []
     torso_length = profile.torso_length
     qtr = pts_per_ring // 4  # vertices from CF to side seam
 
-    # Outward nudge so dart lines sit clearly above the garment surface
-    NUDGE = 1.2  # cm
+    NUDGE = 1.2  # cm outward from garment surface
+
+    def _garment_pt(ring: int, frac_offset: float) -> np.ndarray:
+        """Get interpolated point on garment at fractional vertex offset."""
+        idx_lo = int(math.floor(frac_offset))
+        idx_hi = int(math.ceil(frac_offset))
+        idx_lo = max(0, min(idx_lo, qtr))
+        idx_hi = max(0, min(idx_hi, qtr))
+        vi_lo = ring * pts_per_ring + idx_lo
+        vi_hi = ring * pts_per_ring + idx_hi
+        if vi_lo >= len(garment_verts) or vi_hi >= len(garment_verts):
+            return np.array(garment_verts[min(vi_lo, len(garment_verts) - 1)])
+        t = frac_offset - math.floor(frac_offset)
+        return (1.0 - t) * np.array(garment_verts[vi_lo]) + t * np.array(garment_verts[vi_hi])
 
     for piece, labels in [
         (sloper.front_bodice, ["Front bust dart", "Front waist dart"]),
@@ -163,12 +174,10 @@ def _compute_dart_lines_3d(
             ring_idx = int(round(ring_float))
             ring_idx = max(1, min(ring_idx, n_rings - 1))
 
-            # 2D x_frac: 0=CF, 1=side seam → vertex offset 0..qtr
             x_frac = min(max(dart.apex.x / width_2d, 0.0), 1.0) if width_2d > 0 else 0.5
-            vert_offset = int(round(x_frac * qtr))
-            vert_offset = max(0, min(vert_offset, qtr))
+            vert_offset = x_frac * qtr  # keep as float for precision
 
-            apex_vi = ring_idx * pts_per_ring + vert_offset
+            apex_vi = ring_idx * pts_per_ring + int(round(vert_offset))
             if apex_vi >= len(garment_verts):
                 continue
 
@@ -180,38 +189,31 @@ def _compute_dart_lines_3d(
                 apex_pt = apex_pt + (radial / rn) * NUDGE
 
             # --- Leg direction per dart type ---
-            # Bust dart (di=0): legs go DOWN toward waist (lower ring)
-            # Waist dart (di=1): legs go UP toward bust (higher ring)
-            half_angle_verts = max(1, int(round(
-                math.radians(dart.angle / 2.0) / (2.0 * math.pi) * pts_per_ring
-            )))
-
+            # Bust dart (di=0): legs point downward
+            # Waist dart (di=1): legs point upward
             if di == 0:
-                # Bust dart: legs point downward
                 leg_ring = max(0, ring_idx - 1)
             else:
-                # Waist dart: legs point upward
                 leg_ring = min(n_rings - 1, ring_idx + 1)
 
-            leg1_offset = max(0, min(vert_offset + half_angle_verts, qtr))
-            leg2_offset = max(0, min(vert_offset - half_angle_verts, qtr))
+            # Sub-vertex fractional offset for the half-angle spread.
+            # This ensures small angle changes produce visible V changes.
+            half_angle_frac = dart.angle / 2.0 / 360.0 * pts_per_ring
+            # Scale up for visibility (real dart angles are small)
+            half_angle_frac = max(0.3, half_angle_frac * 3.0)
 
-            leg1_vi = leg_ring * pts_per_ring + leg1_offset
-            leg2_vi = leg_ring * pts_per_ring + leg2_offset
+            leg1_frac = min(vert_offset + half_angle_frac, float(qtr))
+            leg2_frac = max(vert_offset - half_angle_frac, 0.0)
 
-            if leg1_vi >= len(garment_verts) or leg2_vi >= len(garment_verts):
-                continue
+            leg1_full = _garment_pt(leg_ring, leg1_frac)
+            leg2_full = _garment_pt(leg_ring, leg2_frac)
 
-            leg1_full = np.array(garment_verts[leg1_vi])
-            leg2_full = np.array(garment_verts[leg2_vi])
-
-            # Interpolate: stop at 60 % of the way from apex to the
-            # full leg-ring vertex so the V is short and visible.
+            # Interpolate: stop at 60% of the way for a short V
             LEG_FRAC = 0.6
             leg1_pt = apex_pt + LEG_FRAC * (leg1_full - apex_pt)
             leg2_pt = apex_pt + LEG_FRAC * (leg2_full - apex_pt)
 
-            # Nudge legs outward too
+            # Nudge legs outward
             for lpt in (leg1_pt, leg2_pt):
                 lr = np.array([lpt[0], 0.0, lpt[2]])
                 lrn = np.linalg.norm(lr)
