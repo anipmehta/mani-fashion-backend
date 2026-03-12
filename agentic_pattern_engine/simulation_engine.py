@@ -248,37 +248,48 @@ class MassSpringSimulationEngine:
         garment_waist_circ = (front_width + back_width) * 2.0 + waist_ease
 
         # --- Dart relief computation ---
-        # Each dart provides fabric relief proportional to its angle and
-        # length. This is the critical feedback path: when the corrector
-        # widens a dart angle, the relief increases, reducing stress.
-        # Relief is expressed in cm of effective circumference gain.
-        # Coefficient 0.035 calibrated so that typical corrections
-        # (1-2 degree angle change) produce visible stress reduction
-        # within 3-5 iterations.
-        total_front_dart_relief = sum(
-            d.angle * d.length * 0.035
-            for d in sloper.front_bodice.darts
+        # Separate bust-level and waist-level dart relief.  In real
+        # garment construction a bust dart opens at the bust line but
+        # does NOT add fabric at the waist.  Only waist-targeted darts
+        # (index >= 1 on front, all on back) and waist_ease affect
+        # waist stress.  Coefficient 0.035 calibrated so typical
+        # corrections produce visible stress reduction in 3-5 iters.
+        front_darts = sloper.front_bodice.darts
+        back_darts = sloper.back_bodice.darts
+
+        # Front dart[0] = bust dart, dart[1+] = waist darts
+        front_bust_relief = (
+            front_darts[0].angle * front_darts[0].length * 0.035
+            if front_darts else 0.0
         )
-        total_back_dart_relief = sum(
+        front_waist_relief = sum(
             d.angle * d.length * 0.035
-            for d in sloper.back_bodice.darts
+            for d in front_darts[1:]
         )
-        total_dart_relief = total_front_dart_relief + total_back_dart_relief
+        back_dart_relief = sum(
+            d.angle * d.length * 0.035
+            for d in back_darts
+        )
+
+        total_bust_dart_relief = front_bust_relief + back_dart_relief * 0.3
+        total_waist_dart_relief = front_waist_relief + back_dart_relief * 0.7
 
         # Effective garment circumferences after dart relief
-        effective_bust_circ = garment_bust_circ + total_front_dart_relief * 1.2
-        effective_waist_circ = garment_waist_circ + total_dart_relief * 0.8
+        effective_bust_circ = garment_bust_circ + total_bust_dart_relief * 1.2
+        effective_waist_circ = garment_waist_circ + total_waist_dart_relief * 0.8 + waist_ease * 0.5
 
         # --- Bust region ---
         bust_stretch = chest / max(effective_bust_circ, 1e-6)
         bust_stress_raw = self.fabric_stiffness * abs(bust_stretch - 1.0)
         # Additional dart relief factor (diminishing returns)
-        dart_relief_factor = max(0.0, 1.0 - total_front_dart_relief / max(chest * 0.1, 1e-6))
+        dart_relief_factor = max(0.0, 1.0 - total_bust_dart_relief / max(chest * 0.1, 1e-6))
         bust_stress = bust_stress_raw * dart_relief_factor
 
         # --- Waist region ---
+        # Stress only when garment is tighter than body (stretch > 1).
+        # When garment is looser (stretch < 1) there is no tension.
         waist_stretch = waist / max(effective_waist_circ, 1e-6)
-        waist_stress = self.fabric_stiffness * abs(waist_stretch - 1.0)
+        waist_stress = self.fabric_stiffness * max(0.0, waist_stretch - 1.0)
 
         # --- Shoulder region ---
         garment_shoulder = front_width + back_width
@@ -293,18 +304,18 @@ class MassSpringSimulationEngine:
         # Side seam stress from bust-waist differential, reduced by ease
         bust_waist_diff = abs(chest - waist) / max(chest, 1e-6)
         ease_relief = (bust_ease + waist_ease) / max(chest, 1e-6)
-        dart_side_relief = total_dart_relief / max(chest, 1e-6) * 0.3
+        dart_side_relief = (total_bust_dart_relief + total_waist_dart_relief) / max(chest, 1e-6) * 0.3
         side_seam_stress = self.fabric_stiffness * max(0.0, bust_waist_diff - ease_relief - dart_side_relief) * 0.4
 
         # --- Center front ---
-        # Responds to front dart relief directly
-        cf_dart_factor = max(0.0, 1.0 - total_front_dart_relief / max(chest * 0.08, 1e-6))
+        # Responds to front bust dart relief directly
+        cf_dart_factor = max(0.0, 1.0 - total_bust_dart_relief / max(chest * 0.08, 1e-6))
         center_front_stress = bust_stress * 0.5 * cf_dart_factor
 
         # --- Center back ---
-        cb_dart_factor = max(0.0, 1.0 - total_back_dart_relief / max(chest * 0.08, 1e-6))
+        cb_dart_factor = max(0.0, 1.0 - back_dart_relief / max(chest * 0.08, 1e-6))
         center_back_stress = (shoulder_stress * 0.3 + self.fabric_stiffness * abs(
-            total_back_dart_relief / max(front_height, 1e-6)
+            back_dart_relief / max(front_height, 1e-6)
         ) * 0.2) * cb_dart_factor
 
         return {

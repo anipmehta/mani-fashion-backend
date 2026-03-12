@@ -165,11 +165,33 @@ class DartEaseGeometryCorrector:
         """Apply corrections to a sloper and return updated copy.
 
         Modifies dart geometry and ease values based on corrections.
+        Front darts layout: [0] = bust dart, [1] = waist dart.
+        Bust/side_seam/center_front/armhole corrections target the bust dart.
+        Waist/center_back corrections target the waist dart (front) or back dart.
         """
         new_bust_ease = sloper.bust_ease
         new_waist_ease = sloper.waist_ease
         front_darts = list(sloper.front_bodice.darts)
         back_darts = list(sloper.back_bodice.darts)
+
+        # Regions that map to the bust dart (front[0])
+        _BUST_DART_REGIONS = {
+            FitRegion.BUST, FitRegion.SIDE_SEAM,
+            FitRegion.CENTER_FRONT, FitRegion.ARMHOLE,
+        }
+        # Regions that map to the waist dart (front[1]) or back dart
+        _WAIST_DART_REGIONS = {FitRegion.WAIST, FitRegion.CENTER_BACK}
+
+        def _pick_dart(region: FitRegion) -> tuple[list, int]:
+            """Return (dart_list, index) for the target dart."""
+            if region in _BUST_DART_REGIONS:
+                return front_darts, 0
+            if region == FitRegion.WAIST and len(front_darts) > 1:
+                return front_darts, 1
+            if region == FitRegion.CENTER_BACK:
+                return back_darts, 0
+            # Fallback
+            return front_darts, 0
 
         for c in corrections:
             if c.correction_type == CorrectionType.REDISTRIBUTE_EASE:
@@ -179,40 +201,30 @@ class DartEaseGeometryCorrector:
                     new_waist_ease += c.magnitude
 
             elif c.correction_type == CorrectionType.ADJUST_DART_ANGLE:
-                # Widen dart angle on front piece for bust/waist regions
-                target_darts = front_darts if c.target_region in (
-                    FitRegion.BUST, FitRegion.WAIST, FitRegion.CENTER_FRONT,
-                    FitRegion.ARMHOLE, FitRegion.SIDE_SEAM,
-                ) else back_darts
-                if target_darts:
-                    d = target_darts[0]
-                    target_darts[0] = DartGeometry(
+                darts, idx = _pick_dart(c.target_region)
+                if darts and idx < len(darts):
+                    d = darts[idx]
+                    darts[idx] = DartGeometry(
                         apex=d.apex,
                         angle=d.angle + c.magnitude,
                         length=d.length,
                     )
 
             elif c.correction_type == CorrectionType.ADJUST_DART_LENGTH:
-                target_darts = front_darts if c.target_region in (
-                    FitRegion.BUST, FitRegion.WAIST, FitRegion.CENTER_FRONT,
-                    FitRegion.ARMHOLE, FitRegion.SIDE_SEAM,
-                ) else back_darts
-                if target_darts:
-                    d = target_darts[0]
-                    target_darts[0] = DartGeometry(
+                darts, idx = _pick_dart(c.target_region)
+                if darts and idx < len(darts):
+                    d = darts[idx]
+                    darts[idx] = DartGeometry(
                         apex=d.apex,
                         angle=d.angle,
                         length=max(0.5, d.length - c.magnitude),
                     )
 
             elif c.correction_type == CorrectionType.ADJUST_DART_PLACEMENT:
-                target_darts = front_darts if c.target_region in (
-                    FitRegion.BUST, FitRegion.WAIST, FitRegion.CENTER_FRONT,
-                    FitRegion.ARMHOLE, FitRegion.SIDE_SEAM,
-                ) else back_darts
-                if target_darts:
-                    d = target_darts[0]
-                    target_darts[0] = DartGeometry(
+                darts, idx = _pick_dart(c.target_region)
+                if darts and idx < len(darts):
+                    d = darts[idx]
+                    darts[idx] = DartGeometry(
                         apex=Point2D(d.apex.x + c.magnitude * 0.1, d.apex.y),
                         angle=d.angle,
                         length=d.length,
