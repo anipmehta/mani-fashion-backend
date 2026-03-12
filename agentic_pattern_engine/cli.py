@@ -58,6 +58,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="Show per-iteration audit trail with fit issues and corrections")
     p.add_argument("--tight-thresholds", action="store_true",
                     help="Use very tight tension thresholds to force multiple correction iterations")
+    p.add_argument("--dump-iterations", action="store_true",
+                    help="Export pattern OBJ for every iteration (iterations/ subfolder)")
 
     # Output
     p.add_argument("--output-dir", type=str, default="./output")
@@ -217,6 +219,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Pattern (OBJ): {pattern_path}")
         except Exception as e:
             print(f"Pattern OBJ export skipped: {e}")
+
+    # Dump per-iteration pattern OBJs
+    if args.dump_iterations and result.audit_trail.entries:
+        iter_dir = out / "iterations"
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        for entry in result.audit_trail.entries:
+            try:
+                obj_text = ParametricBodyModelBuilder.export_pattern_obj(entry.sloper)
+                fname = f"iteration_{entry.iteration:02d}.obj"
+                (iter_dir / fname).write_text(obj_text)
+            except Exception:
+                pass
+        print(f"Iteration snapshots: {iter_dir}/ ({len(result.audit_trail.entries)} files)")
 
     return 0
 
