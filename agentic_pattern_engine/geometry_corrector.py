@@ -78,7 +78,7 @@ class DartEaseGeometryCorrector:
 
             # For ease-related regions, also add ease redistribution
             if issue.region in _EASE_REGIONS and issue.issue_type == FitIssueType.EXCESS_TENSION:
-                ease_mag = min(issue.violation_magnitude * 0.002, 1.0)  # cm
+                ease_mag = min(issue.violation_magnitude * 0.008, 2.0)  # cm
                 corrections.append(CorrectionStrategy(
                     target_region=issue.region,
                     issue_type=issue.issue_type,
@@ -144,8 +144,8 @@ class DartEaseGeometryCorrector:
 
         if issue.issue_type == FitIssueType.EXCESS_TENSION:
             # Increase dart angle proportional to violation
-            # Scale: 100 Pa violation -> ~2 degrees adjustment
-            return min(violation * 0.02, 15.0)
+            # Scale: 100 Pa violation -> ~5 degrees adjustment
+            return min(violation * 0.05, 15.0)
 
         if issue.issue_type == FitIssueType.INSUFFICIENT_TENSION:
             # Decrease dart length proportional to violation
