@@ -281,3 +281,20 @@ class ParametricBodyModelBuilder:
             dz = nxt[2] - curr[2]
             total += math.sqrt(dx * dx + dz * dz)
         return total
+
+    @staticmethod
+    def export_obj(body_model: "BodyModel") -> str:
+        """Export body model mesh to Wavefront OBJ format string.
+
+        OBJ uses 1-based vertex indices.  The output can be written to a
+        ``.obj`` file and opened in Blender, MeshLab, or any 3-D viewer.
+        """
+        lines: list[str] = []
+        lines.append("# MANI Agentic Pattern Engine — body model mesh")
+        lines.append(f"# vertices: {len(body_model.vertices)}, faces: {len(body_model.faces)}")
+        for v in body_model.vertices:
+            lines.append(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}")
+        for f in body_model.faces:
+            lines.append(f"f {f[0]+1} {f[1]+1} {f[2]+1}")
+        return "\n".join(lines) + "\n"
+

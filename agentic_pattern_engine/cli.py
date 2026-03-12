@@ -25,6 +25,7 @@ import pathlib
 import sys
 
 from agentic_pattern_engine.agent_orchestrator import AgentOrchestrator
+from agentic_pattern_engine.body_model_builder import ParametricBodyModelBuilder
 from agentic_pattern_engine.models import (
     AgentConfig,
     MeasurementProfile,
@@ -197,6 +198,17 @@ def main(argv: list[str] | None = None) -> int:
         pdf_path = out / "pattern.pdf"
         pdf_path.write_bytes(result.pdf_bytes)
         print(f"PDF: {pdf_path}")
+
+    # Export 3D body model as OBJ for viewing in Blender / MeshLab
+    try:
+        builder = ParametricBodyModelBuilder()
+        body_model = builder.build(profile)
+        obj_str = builder.export_obj(body_model)
+        obj_path = out / "body_model.obj"
+        obj_path.write_text(obj_str)
+        print(f"3D Model (OBJ): {obj_path}")
+    except Exception as e:
+        print(f"OBJ export skipped: {e}")
 
     return 0
 
