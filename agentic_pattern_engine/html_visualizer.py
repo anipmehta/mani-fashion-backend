@@ -138,15 +138,30 @@ def generate_visualization(
         if local_max > max_stress:
             max_stress = local_max
 
-        # Fit issues summary
-        issues = []
-        for fi in entry.fit_issues:
-            issues.append({
-                "region": fi.region.value,
-                "type": fi.issue_type.value,
-                "stress": round(fi.measured_stress, 1),
-                "threshold": round(fi.threshold, 1),
-            })
+        # For iteration 0, the audit trail has no fit issues (no sim ran yet).
+        # Re-detect so the visualization shows the real initial state.
+        if entry.iteration == 0 and not entry.fit_issues:
+            from agentic_pattern_engine.fit_detector import TensionFitDetector
+            detector = TensionFitDetector()
+            sim_result = sim.simulate(sloper, body_model)
+            detected = detector.detect(sim_result.tension_map, body_model, thresholds)
+            issues = []
+            for fi in detected:
+                issues.append({
+                    "region": fi.region.value,
+                    "type": fi.issue_type.value,
+                    "stress": round(fi.measured_stress, 1),
+                    "threshold": round(fi.threshold, 1),
+                })
+        else:
+            issues = []
+            for fi in entry.fit_issues:
+                issues.append({
+                    "region": fi.region.value,
+                    "type": fi.issue_type.value,
+                    "stress": round(fi.measured_stress, 1),
+                    "threshold": round(fi.threshold, 1),
+                })
 
         # Use re-computed stress total (not audit trail's 0.0 for iter 0)
         computed_total = sum(
