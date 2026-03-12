@@ -33,7 +33,7 @@ MANI_RUN_ID
   9
 $CUSTOMPROPERTY
   1
-77bb6738
+7ea9e5b8
   9
 $CUSTOMPROPERTYTAG
   1
@@ -57,7 +57,7 @@ MANI_SLOPER_META
   9
 $CUSTOMPROPERTY
   1
-{"sloper_id": "4828462f-bec2-4e89-91b6-1163ae9c607a", "bust_ease": 5.0, "waist_ease": 3.0, "profile": {"chest": 92.0, "waist": 74.0, "hip": 97.0, "shoulder_width": 40.0, "torso_length": 46.0}}
+{"sloper_id": "caeb04f1-42d1-4049-b4ff-848d0c9ca7a8", "bust_ease": 5.0, "waist_ease": 3.0, "profile": {"chest": 92.0, "waist": 74.0, "hip": 97.0, "shoulder_width": 40.0, "torso_length": 46.0}}
   9
 $INSBASE
  10
@@ -529,7 +529,7 @@ $SKPOLY
   9
 $TDCREATE
  40
-2461112.103310185
+2461112.1077662036
   9
 $TDUCREATE
  40
@@ -537,7 +537,7 @@ $TDUCREATE
   9
 $TDUPDATE
  40
-2461112.103310185
+2461112.1077662036
   9
 $TDUUPDATE
  40
@@ -969,11 +969,11 @@ $PSTYLEMODE
   9
 $FINGERPRINTGUID
   2
-{3824A35C-6852-4F91-9511-7FB3D1792F5C}
+{79B2A63D-A596-445B-BD6D-F89273782E6D}
   9
 $VERSIONGUID
   2
-{5D23B86D-DEAE-4FB2-92DE-C1D00B23E3C5}
+{6AFBB948-4721-48CB-B632-F22AB439A5CA}
   9
 $EXTNAMES
 290
@@ -3881,7 +3881,7 @@ DictionaryVariables
 280
 0
   1
-1.4.3 @ 2026-03-12T09:28:46.157064+00:00
+1.4.3 @ 2026-03-12T09:35:11.773746+00:00
   0
 DICTIONARYVAR
   5
@@ -3893,7 +3893,7 @@ DictionaryVariables
 280
 0
   1
-1.4.3 @ 2026-03-12T09:28:46.159386+00:00
+1.4.3 @ 2026-03-12T09:35:11.775552+00:00
   0
 ENDSEC
   0

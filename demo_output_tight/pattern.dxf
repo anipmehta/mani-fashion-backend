@@ -33,7 +33,7 @@ MANI_RUN_ID
   9
 $CUSTOMPROPERTY
   1
-23c75a38
+d4275273
   9
 $CUSTOMPROPERTYTAG
   1
@@ -57,7 +57,7 @@ MANI_SLOPER_META
   9
 $CUSTOMPROPERTY
   1
-{"sloper_id": "578406b0-7560-4914-b4a0-16a35e03b440", "bust_ease": 5.705702144184173, "waist_ease": 3.0, "profile": {"chest": 120.0, "waist": 70.0, "hip": 110.0, "shoulder_width": 38.0, "torso_length": 42.0}}
+{"sloper_id": "32b6bed3-0190-4d28-9522-75d65cceaefc", "bust_ease": 5.705702144184173, "waist_ease": 3.0, "profile": {"chest": 120.0, "waist": 70.0, "hip": 110.0, "shoulder_width": 38.0, "torso_length": 42.0}}
   9
 $INSBASE
  10
@@ -529,7 +529,7 @@ $SKPOLY
   9
 $TDCREATE
  40
-2461112.103611111
+2461112.108009259
   9
 $TDUCREATE
  40
@@ -537,7 +537,7 @@ $TDUCREATE
   9
 $TDUPDATE
  40
-2461112.103611111
+2461112.108009259
   9
 $TDUUPDATE
  40
@@ -969,11 +969,11 @@ $PSTYLEMODE
   9
 $FINGERPRINTGUID
   2
-{7B8F1C66-4C23-478B-A373-B20EE19DF41B}
+{E5908AEA-E92A-4833-A7A1-E7CE213CA07E}
   9
 $VERSIONGUID
   2
-{32E64B63-7A97-471F-9F6A-039F7878676C}
+{CC1366F8-91F9-4AC2-AA36-F165EC0104F9}
   9
 $EXTNAMES
 290
@@ -1363,9 +1363,9 @@ ISM
   0
 CLASS
   1
-ACDBPLACEHOLDER
+LAYOUT
   2
-AcDbPlaceHolder
+AcDbLayout
   3
 ObjectDBX Classes
  90
@@ -1379,9 +1379,9 @@ ObjectDBX Classes
   0
 CLASS
   1
-LAYOUT
+ACDBPLACEHOLDER
   2
-AcDbLayout
+AcDbPlaceHolder
   3
 ObjectDBX Classes
  90
@@ -3881,7 +3881,7 @@ DictionaryVariables
 280
 0
   1
-1.4.3 @ 2026-03-12T09:29:12.703953+00:00
+1.4.3 @ 2026-03-12T09:35:32.354875+00:00
   0
 DICTIONARYVAR
   5
@@ -3893,7 +3893,7 @@ DictionaryVariables
 280
 0
   1
-1.4.3 @ 2026-03-12T09:29:12.706655+00:00
+1.4.3 @ 2026-03-12T09:35:32.356956+00:00
   0
 ENDSEC
   0
