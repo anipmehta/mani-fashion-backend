@@ -186,13 +186,10 @@ def _compute_dart_lines_3d(
             else:
                 tangent = np.array([1.0, 0.0, 0.0])
 
-            # Dart leg direction:
-            #   - Bust dart (di=0): legs extend DOWNWARD from apex (toward waist)
-            #   - Waist dart (di=1): legs extend UPWARD from apex (toward bust point)
-            if di == 0:
-                primary_dir = np.array([0.0, -1.0, 0.0])
-            else:
-                primary_dir = np.array([0.0, 1.0, 0.0])
+            # Dart legs always extend DOWNWARD from the apex on a bodice.
+            # Bust dart: apex at bust level, legs toward waist.
+            # Waist dart: apex near waist, legs toward hem edge.
+            primary_dir = np.array([0.0, -1.0, 0.0])
 
             leg1_dir = primary_dir * math.cos(half_angle_rad) + tangent * math.sin(half_angle_rad)
             leg2_dir = primary_dir * math.cos(half_angle_rad) - tangent * math.sin(half_angle_rad)
@@ -201,17 +198,32 @@ def _compute_dart_lines_3d(
             leg1_end = apex_arr + leg1_dir * leg_len_3d
             leg2_end = apex_arr + leg2_dir * leg_len_3d
 
-            # Clamp leg endpoints to stay within garment y-range
-            garment_y_min = y_min
-            garment_y_max = y_min + y_range
+            # Clamp leg endpoints to stay within the garment y-range.
+            # Allow legs to extend to the hip (y_min) since waist darts
+            # open toward the hem edge.
             for end_pt in (leg1_end, leg2_end):
-                end_pt[1] = max(garment_y_min, min(end_pt[1], garment_y_max))
+                end_pt[1] = max(y_min, min(end_pt[1], y_min + y_range))
 
-            # Offset outward from body center so dart lines sit on cloth surface
+            # Push dart outward so it sits visibly on the garment surface.
+            # Find the maximum garment radius at this angular position
+            # across all rings, then offset to at least that radius + margin.
+            max_garment_r = 0.0
+            for ri in range(n_rings):
+                gvi = ri * pts_per_ring + max(0, min(vert_in_ring, pts_per_ring - 1))
+                if gvi < len(garment_verts):
+                    gpt = garment_verts[gvi]
+                    gr = math.sqrt(gpt[0] ** 2 + gpt[2] ** 2)
+                    if gr > max_garment_r:
+                        max_garment_r = gr
+
             radial = np.array([apex_pt[0], 0.0, apex_pt[2]])
             rn = np.linalg.norm(radial)
             if rn > 1e-6:
-                outward = radial / rn * 0.4
+                direction = radial / rn
+                current_r = rn
+                # Ensure dart sits outside the widest ring at this angle
+                needed_offset = max(0.5, max_garment_r - current_r + 0.5)
+                outward = direction * needed_offset
                 apex_arr = apex_arr + outward
                 leg1_end = leg1_end + outward
                 leg2_end = leg2_end + outward
@@ -276,44 +288,6 @@ def generate_visualization(
     cb_line = [ring * pts_per_ring + pts_per_ring // 2 for ring in range(n_rings)]
     rs_line = [ring * pts_per_ring + pts_per_ring // 4 for ring in range(n_rings)]
     ls_line = [ring * pts_per_ring + 3 * pts_per_ring // 4 for ring in range(n_rings)]
-
-    # Compute straight vertical seam lines as explicit 3D coordinates.
-    # Body mesh rings have varying radii so vertex-based lines curve.
-    # For CF/CB/side seams we want perfectly straight vertical lines.
-    # Use the outermost (bust) ring radius at the correct angle for each seam.
-    def _straight_seam_coords(vert_indices: list[int]) -> list[list[float]]:
-        """Return straight vertical line coords at the angular position of
-        the given vertices, offset outward to sit on the garment surface.
-        Uses the widest ring's radius + garment offset for a straight line."""
-        # Find the ring with the largest radius (bust ring)
-        max_r = 0.0
-        max_r_idx = 0
-        for vi in vert_indices:
-            pt = body_verts[vi]
-            r = math.sqrt(pt[0] ** 2 + pt[2] ** 2)
-            if r > max_r:
-                max_r = r
-                max_r_idx = vi
-        ref_pt = body_verts[max_r_idx]
-        # Compute the angular direction and apply garment offset
-        ref_r = math.sqrt(ref_pt[0] ** 2 + ref_pt[2] ** 2)
-        if ref_r > 1e-6:
-            nx, nz = ref_pt[0] / ref_r, ref_pt[2] / ref_r
-        else:
-            nx, nz = 1.0, 0.0
-        garment_r = ref_r + _BASE_GARMENT_OFFSET + 0.3  # slight extra to sit on cloth
-        ref_x = nx * garment_r
-        ref_z = nz * garment_r
-        coords = []
-        for vi in vert_indices:
-            pt = body_verts[vi]
-            coords.append([round(ref_x, 4), round(pt[1], 4), round(ref_z, 4)])
-        return coords
-
-    straight_cf = _straight_seam_coords(cf_line)
-    straight_cb = _straight_seam_coords(cb_line)
-    straight_rs = _straight_seam_coords(rs_line)
-    straight_ls = _straight_seam_coords(ls_line)
     shoulder_ring_start = (n_rings - 1) * pts_per_ring
     r_shoulder = list(range(shoulder_ring_start, shoulder_ring_start + pts_per_ring // 4 + 1))
     l_shoulder = [shoulder_ring_start] + list(range(
@@ -337,14 +311,6 @@ def generate_visualization(
         "right_side": rs_line, "left_side": ls_line,
         "right_shoulder": r_shoulder, "left_shoulder": l_shoulder,
         "right_princess": rp_line, "left_princess": lp_line,
-    }
-
-    # Straight seam coordinates (CF, CB, side seams) — these don't curve
-    straight_seams = {
-        "center_front": straight_cf,
-        "center_back": straight_cb,
-        "right_side": straight_rs,
-        "left_side": straight_ls,
     }
 
     iterations_data: list[dict] = []
@@ -413,7 +379,6 @@ def generate_visualization(
         "garment_faces": garment_faces,
         "mannequin": mannequin,
         "seam_lines": seam_lines,
-        "straight_seams": straight_seams,
         "iterations": iterations_data,
         "max_stress": round(max_stress, 1),
     }
@@ -662,7 +627,6 @@ const initFrontDarts = DATA.iterations[0].front_darts;
 // --- Seam lines ---
 const SEAM_OFFSET = 0.15;
 const seamLineObjects = [];
-const straightSeamObjects = [];
 
 function createSeamLine(vertexIndices, color, dashed) {
   const positions = new Float32Array(vertexIndices.length * 3);
@@ -680,37 +644,13 @@ function createSeamLine(vertexIndices, color, dashed) {
   return { line, geom, vertexIndices, dashed };
 }
 
-function createStraightSeamLine(coords, color) {
-  const positions = new Float32Array(coords.length * 3);
-  for (let i = 0; i < coords.length; i++) {
-    const rx = coords[i][0], rz = coords[i][2];
-    const rn = Math.sqrt(rx*rx + rz*rz);
-    const ox = rn > 0.001 ? rx/rn * SEAM_OFFSET : 0;
-    const oz = rn > 0.001 ? rz/rn * SEAM_OFFSET : 0;
-    positions[i*3] = coords[i][0] + ox;
-    positions[i*3+1] = coords[i][1];
-    positions[i*3+2] = coords[i][2] + oz;
-  }
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.LineBasicMaterial({ color: color, linewidth: 2 });
-  const line = new THREE.Line(geom, mat);
-  scene.add(line);
-  straightSeamObjects.push(line);
-}
-
-// Straight seams (CF, CB, side seams) — fixed coordinates, no curving
-const SS = DATA.straight_seams;
-if (SS) {
-  if (SS.center_front) createStraightSeamLine(SS.center_front, 0x1a237e);
-  if (SS.center_back) createStraightSeamLine(SS.center_back, 0x1a237e);
-  if (SS.right_side) createStraightSeamLine(SS.right_side, 0x1a237e);
-  if (SS.left_side) createStraightSeamLine(SS.left_side, 0x1a237e);
-}
-
-// Vertex-based seams (shoulder, princess) — update per iteration
+// All seam lines use garment vertex positions (follow the cloth surface)
 const SL = DATA.seam_lines;
 if (SL) {
+  if (SL.center_front) seamLineObjects.push(createSeamLine(SL.center_front, 0x1a237e, false));
+  if (SL.center_back) seamLineObjects.push(createSeamLine(SL.center_back, 0x1a237e, false));
+  if (SL.right_side) seamLineObjects.push(createSeamLine(SL.right_side, 0x1a237e, false));
+  if (SL.left_side) seamLineObjects.push(createSeamLine(SL.left_side, 0x1a237e, false));
   if (SL.right_shoulder) seamLineObjects.push(createSeamLine(SL.right_shoulder, 0xbf360c, false));
   if (SL.left_shoulder) seamLineObjects.push(createSeamLine(SL.left_shoulder, 0xbf360c, false));
   if (SL.right_princess) seamLineObjects.push(createSeamLine(SL.right_princess, 0x4a148c, true));
