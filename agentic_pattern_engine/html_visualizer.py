@@ -140,7 +140,7 @@ def _compute_dart_lines_3d(
 
     for side, piece, labels in [
         ("front", sloper.front_bodice, ["Front bust dart", "Front waist dart"]),
-        ("back", sloper.back_bodice, ["Back dart 1", "Back dart 2"]),
+        ("back", sloper.back_bodice, ["Back shoulder dart", "Back dart 2"]),
     ]:
         width_2d = piece.outline[2].x if len(piece.outline) > 2 else 10.0
         for di, dart in enumerate(piece.darts):
@@ -152,20 +152,27 @@ def _compute_dart_lines_3d(
             ring_idx = max(0, min(ring_idx, n_rings - 1))
 
             # Map 2D apex x to angular position within the ring
+            # Front: CF=vertex 0, side seam=pts_per_ring//4
+            # Back: CB=pts_per_ring//2, side seam going toward pts_per_ring//4
             x_frac = min(max(dart.apex.x / width_2d, 0.0), 1.0) if width_2d > 0 else 0.5
             if side == "front":
                 vert_in_ring = int(round(x_frac * (pts_per_ring // 4)))
             else:
-                vert_in_ring = pts_per_ring // 2 - int(round(x_frac * (pts_per_ring // 4)))
+                # Back: x=0 is CB (vertex pts_per_ring//2), x=width is side seam
+                # Map so x_frac=0 -> CB, x_frac=1 -> side seam (pts_per_ring//4)
+                vert_in_ring = pts_per_ring // 2 + int(round(x_frac * (pts_per_ring // 4)))
 
             apex_vi = ring_idx * pts_per_ring + max(0, min(vert_in_ring, pts_per_ring - 1))
             if apex_vi >= len(garment_verts):
                 continue
             apex_pt = garment_verts[apex_vi]
 
-            leg_len_3d = dart.length * 0.6
+            # Amplified leg length so dart V is clearly visible on the garment.
+            # Use a minimum of 4cm and scale with dart angle for visual impact.
+            leg_len_3d = max(4.0, dart.length * 1.2)
             half_angle_rad = math.radians(dart.angle / 2.0)
 
+            # Get tangent direction from neighboring vertex in the same ring
             neighbor_offset = 1 if side == "front" else -1
             neighbor_vi = ring_idx * pts_per_ring + max(0, min(
                 vert_in_ring + neighbor_offset, pts_per_ring - 1))
@@ -188,11 +195,11 @@ def _compute_dart_lines_3d(
             leg1_end = apex_arr + leg1_dir * leg_len_3d
             leg2_end = apex_arr + leg2_dir * leg_len_3d
 
-            # Offset slightly outward so dart lines sit on cloth surface
+            # Offset outward from body center so dart lines sit on cloth surface
             radial = np.array([apex_pt[0], 0.0, apex_pt[2]])
             rn = np.linalg.norm(radial)
             if rn > 1e-6:
-                outward = radial / rn * 0.2
+                outward = radial / rn * 0.4
                 apex_arr = apex_arr + outward
                 leg1_end = leg1_end + outward
                 leg2_end = leg2_end + outward
@@ -204,7 +211,7 @@ def _compute_dart_lines_3d(
                 "leg2": [round(float(v), 3) for v in leg2_end],
             })
 
-    # Mirror all darts to left side
+    # Mirror all darts to the opposite side
     mirrored = []
     for d in results:
         mirrored.append({
@@ -259,10 +266,24 @@ def generate_visualization(
     l_shoulder = [shoulder_ring_start] + list(range(
         shoulder_ring_start + pts_per_ring - 1,
         shoulder_ring_start + 3 * pts_per_ring // 4 - 1, -1))
-    rp_line = [ring * pts_per_ring + pts_per_ring // 8 for ring in range(n_rings)]
-    lp_line = [ring * pts_per_ring + pts_per_ring - pts_per_ring // 8 for ring in range(n_rings)]
-    rbp_line = [ring * pts_per_ring + pts_per_ring // 2 - pts_per_ring // 8 for ring in range(n_rings)]
-    lbp_line = [ring * pts_per_ring + pts_per_ring // 2 + pts_per_ring // 8 for ring in range(n_rings)]
+
+    # Princess lines pass through the dart apex angular position.
+    # Front bust dart apex is at x = width * 0.6 on the front piece,
+    # which maps to vertex offset = 0.6 * (pts_per_ring // 4) from CF.
+    # Back shoulder dart apex is at x = shoulder_half * 0.5 on the back piece,
+    # which maps from CB toward the side seam.
+    front_width = profile.chest / 4.0 + 2.5  # approximate front width
+    front_bust_x_frac = 0.6  # from _draft_front: bust_dart_apex x = width * 0.6
+    front_princess_offset = max(1, int(round(front_bust_x_frac * (pts_per_ring // 4))))
+
+    back_width = profile.chest / 4.0 + 1.5  # approximate back width
+    back_dart_x_frac = (profile.shoulder_width / 2.0 * 0.5) / back_width if back_width > 0 else 0.3
+    back_princess_offset = max(1, int(round(back_dart_x_frac * (pts_per_ring // 4))))
+
+    rp_line = [ring * pts_per_ring + front_princess_offset for ring in range(n_rings)]
+    lp_line = [ring * pts_per_ring + pts_per_ring - front_princess_offset for ring in range(n_rings)]
+    rbp_line = [ring * pts_per_ring + pts_per_ring // 2 + back_princess_offset for ring in range(n_rings)]
+    lbp_line = [ring * pts_per_ring + pts_per_ring // 2 - back_princess_offset for ring in range(n_rings)]
 
     seam_lines = {
         "center_front": cf_line, "center_back": cb_line,
@@ -654,8 +675,9 @@ function updateDartLines(dartLines3d) {
   }
   if (!dartLines3d) return;
 
+  const dartColor = 0xe65100;
   dartLines3d.forEach(d => {
-    // Each dart is a V: apex -> leg1, apex -> leg2
+    // V-line: leg1 -> apex -> leg2
     const positions = new Float32Array([
       d.leg1[0], d.leg1[1], d.leg1[2],
       d.apex[0], d.apex[1], d.apex[2],
@@ -663,13 +685,25 @@ function updateDartLines(dartLines3d) {
     ]);
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({ color: 0xe65100, linewidth: 2 });
+    const mat = new THREE.LineBasicMaterial({ color: dartColor, linewidth: 2 });
     const line = new THREE.Line(geom, mat);
     dartLineGroup.add(line);
 
-    // Small sphere at apex to mark the dart point
-    const dotGeom = new THREE.SphereGeometry(0.25, 6, 4);
-    const dotMat = new THREE.MeshBasicMaterial({ color: 0xe65100 });
+    // Semi-transparent filled triangle between the V legs
+    const triGeom = new THREE.BufferGeometry();
+    triGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    triGeom.setIndex([0, 1, 2]);
+    triGeom.computeVertexNormals();
+    const triMat = new THREE.MeshBasicMaterial({
+      color: dartColor, transparent: true, opacity: 0.25,
+      side: THREE.DoubleSide, depthWrite: false
+    });
+    const tri = new THREE.Mesh(triGeom, triMat);
+    dartLineGroup.add(tri);
+
+    // Apex dot
+    const dotGeom = new THREE.SphereGeometry(0.4, 8, 6);
+    const dotMat = new THREE.MeshBasicMaterial({ color: dartColor });
     const dot = new THREE.Mesh(dotGeom, dotMat);
     dot.position.set(d.apex[0], d.apex[1], d.apex[2]);
     dartLineGroup.add(dot);
