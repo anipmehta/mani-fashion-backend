@@ -37,7 +37,7 @@ _CORRECTION_MAP: dict[FitIssueType, CorrectionType] = {
 }
 
 # Regions that benefit from ease redistribution
-_EASE_REGIONS = {FitRegion.BUST, FitRegion.WAIST, FitRegion.SIDE_SEAM}
+_EASE_REGIONS = {FitRegion.BUST, FitRegion.WAIST, FitRegion.SIDE_SEAM, FitRegion.CENTER_FRONT}
 
 
 class DartEaseGeometryCorrector:
@@ -143,9 +143,12 @@ class DartEaseGeometryCorrector:
         violation = issue.violation_magnitude
 
         if issue.issue_type == FitIssueType.EXCESS_TENSION:
-            # Increase dart angle proportional to violation
-            # Scale: 100 Pa violation -> ~5 degrees adjustment
-            return min(violation * 0.05, 15.0)
+            # Increase dart angle proportional to violation.
+            # Scale: 100 Pa violation -> ~5 degrees adjustment.
+            # Floor of 0.5° prevents infinitesimal corrections near
+            # the threshold (e.g. 1 Pa violation → 0.05° is too small
+            # to ever converge).
+            return min(max(violation * 0.05, 0.5), 15.0)
 
         if issue.issue_type == FitIssueType.INSUFFICIENT_TENSION:
             # Decrease dart length proportional to violation
@@ -195,7 +198,7 @@ class DartEaseGeometryCorrector:
 
         for c in corrections:
             if c.correction_type == CorrectionType.REDISTRIBUTE_EASE:
-                if c.target_region in (FitRegion.BUST, FitRegion.SIDE_SEAM):
+                if c.target_region in (FitRegion.BUST, FitRegion.SIDE_SEAM, FitRegion.CENTER_FRONT):
                     new_bust_ease += c.magnitude
                 elif c.target_region == FitRegion.WAIST:
                     new_waist_ease += c.magnitude

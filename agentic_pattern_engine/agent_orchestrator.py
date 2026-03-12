@@ -198,12 +198,16 @@ class AgentOrchestrator:
 
     @staticmethod
     def _is_stalled(stress_history: list[float], threshold: int) -> bool:
-        """Detect stall: N consecutive non-improving iterations."""
+        """Detect stall: no meaningful improvement over N iterations.
+
+        Compares the oldest and newest values in the window.  If the
+        total drop is less than 0.5 Pa the loop is considered stalled.
+        """
         if len(stress_history) < threshold:
             return False
         recent = stress_history[-threshold:]
-        # Stalled if no improvement across the window
-        return all(recent[i] >= recent[i - 1] for i in range(1, len(recent)))
+        improvement = recent[0] - recent[-1]
+        return improvement < 0.5
 
     @staticmethod
     def _detect_oscillation(issue_history: list[list[FitIssue]]) -> bool:

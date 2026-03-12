@@ -51,7 +51,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # Config overrides
     p.add_argument("--iteration-limit", type=int, default=20)
-    p.add_argument("--stall-threshold", type=int, default=3)
+    p.add_argument("--stall-threshold", type=int, default=5)
     p.add_argument("--max-ease-tolerance", type=float, default=2.0)
 
     # Testing / debug

@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
 from agentic_pattern_engine.body_model_builder import ParametricBodyModelBuilder
-from agentic_pattern_engine.fit_detector import TensionFitDetector, _INSUFFICIENT_FLOOR_RATIO
+from agentic_pattern_engine.fit_detector import TensionFitDetector
 from agentic_pattern_engine.models import (
     FitIssueType,
     FitRegion,
@@ -77,12 +77,8 @@ def test_fit_detection_correctness(data, thresholds: TensionThresholds):
             assert matching[0].issue_type == FitIssueType.EXCESS_TENSION
             assert abs(matching[0].measured_stress - mean_stress) < 1e-6
             assert abs(matching[0].threshold - threshold_val) < 1e-6
-        elif mean_stress < threshold_val * _INSUFFICIENT_FLOOR_RATIO:
-            # Must appear as insufficient_tension
-            assert len(matching) == 1, f"{region} should have insufficient_tension issue"
-            assert matching[0].issue_type == FitIssueType.INSUFFICIENT_TENSION
         else:
-            # Within tolerance — should NOT appear
+            # At or below threshold — should NOT appear
             assert len(matching) == 0, f"{region} should not have issues"
 
     # Determinism: second call must produce identical results

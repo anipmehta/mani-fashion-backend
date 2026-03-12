@@ -69,6 +69,7 @@ class MassSpringSimulationEngine:
         tension_map = TensionMap(
             vertex_stresses=stresses,
             collision_vertices=collisions,
+            regional_stresses=self._compute_regional_stresses(sloper, body_model.profile),
         )
         return SimulationResult(
             tension_map=tension_map,
@@ -202,10 +203,7 @@ class MassSpringSimulationEngine:
             region_name = vertex_region_map.get(nearest_body_idx)
             if region_name and region_name in region_stresses:
                 stresses[i] = region_stresses[region_name]
-            else:
-                # Vertex not in any named region — assign average stress
-                if region_stresses:
-                    stresses[i] = sum(region_stresses.values()) / len(region_stresses)
+            # Unmapped vertices get zero stress — no phantom tension
 
         return stresses
 
@@ -280,7 +278,8 @@ class MassSpringSimulationEngine:
 
         # --- Bust region ---
         bust_stretch = chest / max(effective_bust_circ, 1e-6)
-        bust_stress_raw = self.fabric_stiffness * abs(bust_stretch - 1.0)
+        # Only tension when garment is tighter than body (stretch > 1)
+        bust_stress_raw = self.fabric_stiffness * max(0.0, bust_stretch - 1.0)
         # Additional dart relief factor (diminishing returns)
         dart_relief_factor = max(0.0, 1.0 - total_bust_dart_relief / max(chest * 0.1, 1e-6))
         bust_stress = bust_stress_raw * dart_relief_factor
@@ -294,23 +293,32 @@ class MassSpringSimulationEngine:
         # --- Shoulder region ---
         garment_shoulder = front_width + back_width
         shoulder_stretch = shoulder_width / max(garment_shoulder, 1e-6)
-        shoulder_stress = self.fabric_stiffness * abs(shoulder_stretch - 1.0) * 0.8
+        shoulder_stress = self.fabric_stiffness * max(0.0, shoulder_stretch - 1.0) * 0.8
 
         # --- Armhole region ---
+        # Armhole stress from bust-shoulder ratio, reduced by bust dart
+        # relief (wider bust dart opens the armscye).
         bust_shoulder_ratio = chest / max(shoulder_width * 2.0, 1e-6)
-        armhole_stress = self.fabric_stiffness * abs(bust_shoulder_ratio - 1.0) * 0.6
+        armhole_dart_factor = max(0.0, 1.0 - total_bust_dart_relief / max(chest * 0.06, 1e-6))
+        armhole_stress = self.fabric_stiffness * max(0.0, bust_shoulder_ratio - 1.0) * 0.6 * armhole_dart_factor
 
         # --- Side seam region ---
         # Side seam stress from bust-waist differential, reduced by ease
+        # and dart relief.  Both bust and waist darts help the side seam
+        # because they redistribute fabric around the torso.
         bust_waist_diff = abs(chest - waist) / max(chest, 1e-6)
         ease_relief = (bust_ease + waist_ease) / max(chest, 1e-6)
-        dart_side_relief = (total_bust_dart_relief + total_waist_dart_relief) / max(chest, 1e-6) * 0.3
+        dart_side_relief = (total_bust_dart_relief + total_waist_dart_relief) / max(chest, 1e-6) * 1.5
         side_seam_stress = self.fabric_stiffness * max(0.0, bust_waist_diff - ease_relief - dart_side_relief) * 0.4
 
         # --- Center front ---
-        # Responds to front bust dart relief directly
-        cf_dart_factor = max(0.0, 1.0 - total_bust_dart_relief / max(chest * 0.08, 1e-6))
-        center_front_stress = bust_stress * 0.5 * cf_dart_factor
+        # Center front tension comes from the closure pulling against
+        # the bust.  It responds to bust dart relief AND ease.  When
+        # bust_ease grows large enough relative to the bust-body gap,
+        # center front tension drops to zero.
+        cf_dart_factor = max(0.0, 1.0 - total_bust_dart_relief / max(chest * 0.05, 1e-6))
+        cf_ease_factor = max(0.0, 1.0 - bust_ease / max(chest * 0.12, 1e-6))
+        center_front_stress = bust_stress_raw * 0.4 * cf_dart_factor * cf_ease_factor
 
         # --- Center back ---
         cb_dart_factor = max(0.0, 1.0 - back_dart_relief / max(chest * 0.08, 1e-6))

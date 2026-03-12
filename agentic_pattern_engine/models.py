@@ -144,6 +144,7 @@ class TensionMap:
     """Per-vertex stress values from cloth simulation."""
     vertex_stresses: np.ndarray     # (N,) float64, Pascals
     collision_vertices: np.ndarray  # vertex indices with body collision
+    regional_stresses: dict[str, float] | None = None  # region name -> Pa
 
 
 @dataclass
@@ -231,7 +232,7 @@ class AgentConfig:
     iteration_limit: int = 20
     oscillation_dampening_factor: float = 0.5
     max_ease_tolerance: float = 2.0       # cm
-    stall_threshold: int = 3              # consecutive non-improving iterations
+    stall_threshold: int = 5              # iterations to check for stall
     tension_thresholds: TensionThresholds = field(
         default_factory=TensionThresholds
     )
