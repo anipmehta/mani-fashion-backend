@@ -141,9 +141,9 @@ def main(argv: list[str] | None = None) -> int:
     # Build thresholds — tight mode uses very low values to force corrections
     if args.tight_thresholds:
         thresholds = TensionThresholds(
-            bust=30.0, waist=25.0, shoulder=40.0,
-            armhole=35.0, side_seam=30.0,
-            center_front=25.0, center_back=25.0,
+            bust=100.0, waist=80.0, shoulder=120.0,
+            armhole=110.0, side_seam=90.0,
+            center_front=80.0, center_back=80.0,
         )
     else:
         thresholds = TensionThresholds()
