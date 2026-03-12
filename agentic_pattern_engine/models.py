@@ -206,13 +206,13 @@ class CorrectionStrategy:
 @dataclass(frozen=True)
 class TensionThresholds:
     """Per-region tension thresholds in Pascals."""
-    bust: float = 60.0
-    waist: float = 50.0
-    shoulder: float = 80.0
-    armhole: float = 70.0
-    side_seam: float = 55.0
-    center_front: float = 50.0
-    center_back: float = 50.0
+    bust: float = 500.0
+    waist: float = 400.0
+    shoulder: float = 600.0
+    armhole: float = 550.0
+    side_seam: float = 450.0
+    center_front: float = 400.0
+    center_back: float = 400.0
 
     def validate(self) -> list[str]:
         """Return list of error strings for zero or negative values."""
