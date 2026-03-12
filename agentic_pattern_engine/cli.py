@@ -26,6 +26,7 @@ import sys
 
 from agentic_pattern_engine.agent_orchestrator import AgentOrchestrator
 from agentic_pattern_engine.body_model_builder import ParametricBodyModelBuilder
+from agentic_pattern_engine.html_visualizer import generate_visualization
 from agentic_pattern_engine.models import (
     AgentConfig,
     MeasurementProfile,
@@ -232,6 +233,18 @@ def main(argv: list[str] | None = None) -> int:
             except Exception:
                 pass
         print(f"Iteration snapshots: {iter_dir}/ ({len(result.audit_trail.entries)} files)")
+
+    # Generate interactive 3D visualization
+    if result.audit_trail.entries:
+        try:
+            builder = ParametricBodyModelBuilder()
+            bm = builder.build(profile)
+            html = generate_visualization(bm, result.audit_trail, config.tension_thresholds)
+            viz_path = out / "visualization.html"
+            viz_path.write_text(html)
+            print(f"3D Visualization: {viz_path}")
+        except Exception as e:
+            print(f"Visualization skipped: {e}")
 
     return 0
 
