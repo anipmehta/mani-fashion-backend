@@ -140,7 +140,6 @@ def _compute_dart_lines_3d(
 
     for side, piece, labels in [
         ("front", sloper.front_bodice, ["Front bust dart", "Front waist dart"]),
-        ("back", sloper.back_bodice, ["Back shoulder dart", "Back dart 2"]),
     ]:
         width_2d = piece.outline[2].x if len(piece.outline) > 2 else 10.0
         for di, dart in enumerate(piece.darts):
@@ -157,11 +156,6 @@ def _compute_dart_lines_3d(
             x_frac = min(max(dart.apex.x / width_2d, 0.0), 1.0) if width_2d > 0 else 0.5
             if side == "front":
                 vert_in_ring = int(round(x_frac * (pts_per_ring // 4)))
-            else:
-                # Back: x=0 is CB (vertex pts_per_ring//2), x=width is side seam.
-                # Go from CB toward the right side seam (decreasing vertex index
-                # toward pts_per_ring//4) so the dart lands on the +z (right) side.
-                vert_in_ring = pts_per_ring // 2 - int(round(x_frac * (pts_per_ring // 4)))
 
             apex_vi = ring_idx * pts_per_ring + max(0, min(vert_in_ring, pts_per_ring - 1))
             if apex_vi >= len(garment_verts):
