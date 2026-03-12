@@ -15,3 +15,11 @@ build/
 
 # Output
 output/
+demo_output/
+demo_output_tight/
+
+# OS
+.DS_Store
+
+# Kiro
+.kiro/
