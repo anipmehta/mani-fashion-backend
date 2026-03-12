@@ -2,7 +2,7 @@
 
 Generates a self-contained HTML file that shows:
 - The 3D body model (semi-transparent)
-- The garment mesh draped on the body, colored by per-vertex tension
+- A garment shell mesh draped on the body, colored by per-region tension
 - A slider to scrub through self-correction iterations
 
 Open the resulting HTML in any modern browser.
@@ -11,16 +11,99 @@ Open the resulting HTML in any modern browser.
 from __future__ import annotations
 
 import json
+import math
 
 import numpy as np
 
 from agentic_pattern_engine.models import (
     AuditTrail,
     BodyModel,
-    BodiceSloper,
     TensionThresholds,
 )
 from agentic_pattern_engine.simulation_engine import MassSpringSimulationEngine
+
+
+# Number of points around each garment cross-section ring
+_RING_PTS = 20
+# Garment offset from body surface (cm)
+_GARMENT_OFFSET = 0.8
+
+
+def _build_garment_shell(body_model: BodyModel) -> tuple[list, list]:
+    """Build a garment shell mesh that wraps around the body.
+
+    Creates a cylindrical grid by offsetting each body cross-section
+    outward, producing a continuous surface that looks like draped fabric.
+
+    Returns (vertices, faces) where vertices is list of [x,y,z] and
+    faces is list of [i,j,k] triangle indices.
+    """
+    bv = body_model.vertices
+    n_body = len(bv)
+
+    # The body has 4 cross-section rings of 20 points each (80 total).
+    # Detect ring size from the body mesh structure.
+    # Points at the same y-level form a ring.
+    y_values = sorted(set(round(float(v[1]), 4) for v in bv))
+    n_rings = len(y_values)
+    pts_per_ring = n_body // n_rings if n_rings > 0 else 20
+
+    garment_verts: list[list[float]] = []
+    for vi in range(n_body):
+        pt = bv[vi].copy()
+        # Offset outward in the XZ plane (radial direction)
+        radial = np.array([pt[0], 0.0, pt[2]])
+        norm = np.linalg.norm(radial)
+        if norm > 1e-6:
+            pt += (radial / norm) * _GARMENT_OFFSET
+        garment_verts.append(pt.tolist())
+
+    # Build quad faces between adjacent rings, split into triangles
+    garment_faces: list[list[int]] = []
+    for ring in range(n_rings - 1):
+        for i in range(pts_per_ring):
+            # Current ring vertex indices
+            a = ring * pts_per_ring + i
+            b = ring * pts_per_ring + (i + 1) % pts_per_ring
+            # Next ring vertex indices
+            c = (ring + 1) * pts_per_ring + i
+            d = (ring + 1) * pts_per_ring + (i + 1) % pts_per_ring
+            garment_faces.append([a, c, b])
+            garment_faces.append([b, c, d])
+
+    return garment_verts, garment_faces
+
+
+def _vertex_region_stress(
+    body_model: BodyModel,
+    regional_stresses: dict[str, float],
+) -> list[float]:
+    """Map regional stress values to per-vertex stress for the garment shell.
+
+    Each vertex gets the stress of its nearest body region.
+    """
+    bv = body_model.vertices
+    n = len(bv)
+    fr = body_model.fit_regions
+
+    # Build vertex -> region mapping
+    region_map: dict[int, str] = {}
+    for name in ("bust", "waist", "shoulder", "armhole",
+                 "side_seam", "center_front", "center_back"):
+        indices = getattr(fr, name)
+        for idx in indices:
+            region_map[int(idx)] = name
+
+    stresses = []
+    avg_stress = (sum(regional_stresses.values()) / len(regional_stresses)
+                  if regional_stresses else 0.0)
+    for i in range(n):
+        region = region_map.get(i)
+        if region and region in regional_stresses:
+            stresses.append(regional_stresses[region])
+        else:
+            stresses.append(avg_stress)
+    return stresses
 
 
 def generate_visualization(
@@ -28,48 +111,32 @@ def generate_visualization(
     audit_trail: AuditTrail,
     thresholds: TensionThresholds | None = None,
 ) -> str:
-    """Generate a self-contained HTML visualization.
-
-    Re-simulates each iteration's sloper against the body model to
-    produce garment meshes and tension heatmaps.
-    """
+    """Generate a self-contained HTML visualization."""
     sim = MassSpringSimulationEngine()
     thresholds = thresholds or TensionThresholds()
 
-    # Collect body mesh data
+    # Body mesh data
     body_verts = body_model.vertices.tolist()
     body_faces = body_model.faces.tolist()
 
-    # Collect per-iteration garment data
+    # Build garment shell (same topology for all iterations, just colors change)
+    garment_verts, garment_faces = _build_garment_shell(body_model)
+
+    # Collect per-iteration stress data
     iterations_data: list[dict] = []
+    max_stress = 0.0
 
     for entry in audit_trail.entries:
         sloper = entry.sloper
 
-        # Re-simulate to get garment mesh positions and stresses
-        sim_result = sim.simulate(sloper, body_model)
-        garment_verts = sim._map_pattern_to_body(sloper, body_model).tolist()
-        stresses = sim_result.tension_map.vertex_stresses.tolist()
+        # Get regional stresses from simulation
+        regional = sim._compute_regional_stresses(sloper, body_model.profile)
 
-        # Build simple triangle fan for garment visualization
-        n_front = len(sloper.front_bodice.outline) - 1  # skip closing pt
-        n_back = len(sloper.back_bodice.outline) - 1
-        n_front_darts = len(sloper.front_bodice.darts)
-        n_front_notches = len(sloper.front_bodice.notch_marks)
-        n_back_darts = len(sloper.back_bodice.darts)
-        n_back_notches = len(sloper.back_bodice.notch_marks)
-
-        total_front = n_front + n_front_darts + n_front_notches
-        total_back = n_back + n_back_darts + n_back_notches
-
-        garment_faces = []
-        # Fan triangulate front piece (first total_front vertices)
-        for i in range(1, total_front - 1):
-            garment_faces.append([0, i, i + 1])
-        # Fan triangulate back piece
-        offset = total_front
-        for i in range(1, total_back - 1):
-            garment_faces.append([offset, offset + i, offset + i + 1])
+        # Map to per-vertex stress
+        vertex_stresses = _vertex_region_stress(body_model, regional)
+        local_max = max(vertex_stresses) if vertex_stresses else 0.0
+        if local_max > max_stress:
+            max_stress = local_max
 
         # Fit issues summary
         issues = []
@@ -83,23 +150,21 @@ def generate_visualization(
 
         iterations_data.append({
             "iteration": entry.iteration,
-            "garment_vertices": garment_verts,
-            "garment_faces": garment_faces,
-            "stresses": stresses,
+            "stresses": [round(s, 2) for s in vertex_stresses],
             "total_stress": round(entry.total_stress_magnitude, 1),
             "fit_issues": issues,
             "bust_ease": round(sloper.bust_ease, 2),
             "waist_ease": round(sloper.waist_ease, 2),
+            "n_corrections": len(entry.corrections_applied),
         })
 
     data = {
         "body_vertices": body_verts,
         "body_faces": body_faces,
+        "garment_vertices": garment_verts,
+        "garment_faces": garment_faces,
         "iterations": iterations_data,
-        "max_stress": round(max(
-            max(it["stresses"]) if it["stresses"] else 0
-            for it in iterations_data
-        ), 1),
+        "max_stress": round(max_stress, 1),
     }
 
     return _HTML_TEMPLATE.replace("__DATA__", json.dumps(data))
@@ -116,18 +181,18 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   #container { width: 100vw; height: 100vh; }
   #controls {
     position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,0.8); padding: 16px 24px; border-radius: 12px;
+    background: rgba(0,0,0,0.85); padding: 16px 24px; border-radius: 12px;
     display: flex; flex-direction: column; align-items: center; gap: 8px;
-    min-width: 500px;
+    min-width: 560px; backdrop-filter: blur(8px);
   }
-  #slider { width: 100%; cursor: pointer; }
+  #slider { width: 100%; cursor: pointer; accent-color: #4fc3f7; }
   .info { font-size: 13px; opacity: 0.9; }
   .info b { color: #4fc3f7; }
   #issues { font-size: 12px; color: #ffab91; max-height: 80px; overflow-y: auto; width: 100%; }
   #legend {
     position: absolute; top: 20px; right: 20px;
-    background: rgba(0,0,0,0.8); padding: 12px 16px; border-radius: 8px;
-    font-size: 12px;
+    background: rgba(0,0,0,0.85); padding: 12px 16px; border-radius: 8px;
+    font-size: 12px; backdrop-filter: blur(8px);
   }
   .legend-bar {
     width: 150px; height: 16px; border-radius: 4px;
@@ -136,14 +201,32 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   }
   .legend-labels { display: flex; justify-content: space-between; font-size: 11px; }
   h3 { font-size: 14px; margin-bottom: 4px; color: #4fc3f7; }
+  #title {
+    position: absolute; top: 20px; left: 20px;
+    background: rgba(0,0,0,0.85); padding: 12px 16px; border-radius: 8px;
+    backdrop-filter: blur(8px);
+  }
+  #title h2 { font-size: 16px; color: #4fc3f7; margin-bottom: 2px; }
+  #title p { font-size: 11px; opacity: 0.7; }
+  .converged { color: #69f0ae !important; }
 </style>
 </head>
 <body>
 <div id="container"></div>
+<div id="title">
+  <h2>MANI Agentic Pattern Engine</h2>
+  <p>Bodice drape simulation with tension heatmap</p>
+  <p style="margin-top:4px">Drag to rotate · Scroll to zoom · Arrow keys to scrub</p>
+</div>
 <div id="legend">
   <h3>Tension Heatmap</h3>
   <div class="legend-bar"></div>
-  <div class="legend-labels"><span>0 Pa</span><span id="max-stress-label">500 Pa</span></div>
+  <div class="legend-labels"><span>0 Pa (good fit)</span><span id="max-label">500 Pa</span></div>
+  <div style="margin-top:8px; font-size:11px; opacity:0.7">
+    <div>🟢 Green = within threshold</div>
+    <div>🟡 Yellow = approaching limit</div>
+    <div>🔴 Red = excess tension</div>
+  </div>
 </div>
 <div id="controls">
   <div class="info">
@@ -151,20 +234,22 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     &nbsp;|&nbsp; Total stress: <b id="total-stress">0</b> Pa
     &nbsp;|&nbsp; Bust ease: <b id="bust-ease">0</b> cm
     &nbsp;|&nbsp; Waist ease: <b id="waist-ease">0</b> cm
+    &nbsp;|&nbsp; Corrections: <b id="n-corr">0</b>
   </div>
   <input type="range" id="slider" min="0" max="0" value="0">
   <div id="issues"></div>
 </div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
 const DATA = __DATA__;
 
-// Scene setup
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a2e);
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -172,44 +257,71 @@ container.appendChild(renderer.domElement);
 
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+controls.dampingFactor = 0.08;
 
 // Lighting
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(50, 80, 50);
-scene.add(dirLight);
-const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
-dirLight2.position.set(-50, 40, -50);
-scene.add(dirLight2);
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const d1 = new THREE.DirectionalLight(0xffffff, 0.7);
+d1.position.set(50, 80, 60);
+scene.add(d1);
+const d2 = new THREE.DirectionalLight(0xffffff, 0.3);
+d2.position.set(-40, 30, -50);
+scene.add(d2);
+scene.add(new THREE.HemisphereLight(0x4fc3f7, 0x1a1a2e, 0.2));
 
-// Body mesh (semi-transparent)
+// --- Body mesh ---
 const bodyGeom = new THREE.BufferGeometry();
-const bv = new Float32Array(DATA.body_vertices.flat());
-bodyGeom.setAttribute('position', new THREE.BufferAttribute(bv, 3));
-const bi = [];
-DATA.body_faces.forEach(f => bi.push(f[0], f[1], f[2]));
-bodyGeom.setIndex(bi);
+bodyGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(DATA.body_vertices.flat()), 3));
+const bIdx = []; DATA.body_faces.forEach(f => bIdx.push(f[0],f[1],f[2]));
+bodyGeom.setIndex(bIdx);
 bodyGeom.computeVertexNormals();
-const bodyMat = new THREE.MeshPhongMaterial({
-  color: 0x90a4ae, transparent: true, opacity: 0.35, side: THREE.DoubleSide
-});
-const bodyMesh = new THREE.Mesh(bodyGeom, bodyMat);
+const bodyMesh = new THREE.Mesh(bodyGeom, new THREE.MeshPhongMaterial({
+  color: 0x78909c, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false
+}));
 scene.add(bodyMesh);
 
-// Wireframe for body
+// Body wireframe
 const wireGeo = new THREE.WireframeGeometry(bodyGeom);
-const wireMat = new THREE.LineBasicMaterial({ color: 0x546e7a, opacity: 0.3, transparent: true });
-scene.add(new THREE.LineSegments(wireGeo, wireMat));
+scene.add(new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+  color: 0x546e7a, opacity: 0.15, transparent: true
+})));
 
-// Garment mesh (will be updated per iteration)
-let garmentMesh = null;
+// --- Garment mesh ---
+const garmentGeom = new THREE.BufferGeometry();
+const gVerts = new Float32Array(DATA.garment_vertices.flat());
+garmentGeom.setAttribute('position', new THREE.BufferAttribute(gVerts, 3));
+const gIdx = []; DATA.garment_faces.forEach(f => gIdx.push(f[0],f[1],f[2]));
+garmentGeom.setIndex(gIdx);
 
-function stressToColor(stress, maxStress) {
-  const t = Math.min(stress / Math.max(maxStress, 1), 1.0);
-  // green -> yellow -> red
-  const r = t < 0.5 ? t * 2 : 1.0;
-  const g = t < 0.5 ? 1.0 : 1.0 - (t - 0.5) * 2;
-  const b = 0;
+// Vertex colors (will be updated per iteration)
+const nGarmentVerts = DATA.garment_vertices.length;
+const colorAttr = new Float32Array(nGarmentVerts * 3);
+garmentGeom.setAttribute('color', new THREE.BufferAttribute(colorAttr, 3));
+garmentGeom.computeVertexNormals();
+
+const garmentMesh = new THREE.Mesh(garmentGeom, new THREE.MeshPhongMaterial({
+  vertexColors: true, side: THREE.DoubleSide, shininess: 20,
+  transparent: true, opacity: 0.85
+}));
+scene.add(garmentMesh);
+
+// Garment wireframe (subtle)
+const gWire = new THREE.WireframeGeometry(garmentGeom);
+const gWireMesh = new THREE.LineSegments(gWire, new THREE.LineBasicMaterial({
+  color: 0xffffff, opacity: 0.08, transparent: true
+}));
+scene.add(gWireMesh);
+
+function stressToColor(stress, maxS) {
+  const t = Math.min(stress / Math.max(maxS, 1), 1.0);
+  let r, g, b;
+  if (t < 0.5) {
+    // green -> yellow
+    r = t * 2; g = 1.0; b = 0;
+  } else {
+    // yellow -> red
+    r = 1.0; g = 1.0 - (t - 0.5) * 2; b = 0;
+  }
   return [r, g, b];
 }
 
@@ -217,46 +329,26 @@ function showIteration(idx) {
   const it = DATA.iterations[idx];
   if (!it) return;
 
-  // Remove old garment
-  if (garmentMesh) { scene.remove(garmentMesh); garmentMesh.geometry.dispose(); }
-
-  const geom = new THREE.BufferGeometry();
-  const verts = new Float32Array(it.garment_vertices.flat());
-  geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-
-  // Vertex colors from stress
-  const colors = new Float32Array(it.garment_vertices.length * 3);
   const maxS = DATA.max_stress || 500;
+  const colors = garmentGeom.attributes.color.array;
   for (let i = 0; i < it.stresses.length; i++) {
     const [r, g, b] = stressToColor(it.stresses[i], maxS);
     colors[i*3] = r; colors[i*3+1] = g; colors[i*3+2] = b;
   }
-  geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  garmentGeom.attributes.color.needsUpdate = true;
 
-  const faces = [];
-  it.garment_faces.forEach(f => faces.push(f[0], f[1], f[2]));
-  geom.setIndex(faces);
-  geom.computeVertexNormals();
-
-  const mat = new THREE.MeshPhongMaterial({
-    vertexColors: true, side: THREE.DoubleSide, shininess: 30,
-    transparent: true, opacity: 0.85,
-  });
-  garmentMesh = new THREE.Mesh(geom, mat);
-  scene.add(garmentMesh);
-
-  // Update UI
   document.getElementById('iter-num').textContent = it.iteration;
   document.getElementById('total-stress').textContent = it.total_stress;
   document.getElementById('bust-ease').textContent = it.bust_ease;
   document.getElementById('waist-ease').textContent = it.waist_ease;
+  document.getElementById('n-corr').textContent = it.n_corrections;
 
   const issuesDiv = document.getElementById('issues');
   if (it.fit_issues.length === 0) {
-    issuesDiv.innerHTML = '<span style="color:#69f0ae">✓ Converged — no fit issues</span>';
+    issuesDiv.innerHTML = '<span class="converged">✓ Converged — no fit issues</span>';
   } else {
     issuesDiv.innerHTML = it.fit_issues.map(fi =>
-      `<div>⚠ ${fi.region}: ${fi.type} (${fi.stress} Pa, threshold ${fi.threshold} Pa)</div>`
+      '<div>⚠ ' + fi.region + ': ' + fi.type + ' (' + fi.stress + ' Pa, threshold ' + fi.threshold + ' Pa)</div>'
     ).join('');
   }
 }
@@ -265,24 +357,20 @@ function showIteration(idx) {
 const slider = document.getElementById('slider');
 slider.max = DATA.iterations.length - 1;
 document.getElementById('iter-max').textContent = DATA.iterations.length - 1;
-document.getElementById('max-stress-label').textContent = (DATA.max_stress || 500) + ' Pa';
+document.getElementById('max-label').textContent = (DATA.max_stress || 500) + ' Pa';
 slider.addEventListener('input', () => showIteration(parseInt(slider.value)));
 
-// Camera position
+// Camera
 bodyGeom.computeBoundingBox();
 const box = bodyGeom.boundingBox;
-const center = new THREE.Vector3();
-box.getCenter(center);
-const size = new THREE.Vector3();
-box.getSize(size);
-camera.position.set(center.x + size.x * 2, center.y + size.y * 0.5, center.z + size.z * 3);
+const center = new THREE.Vector3(); box.getCenter(center);
+const size = new THREE.Vector3(); box.getSize(size);
+camera.position.set(center.x + size.x * 1.5, center.y + size.y * 0.3, center.z + size.z * 2.5);
 controls.target.copy(center);
 controls.update();
 
-// Initial render
 showIteration(0);
 
-// Animation loop
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -290,17 +378,15 @@ function animate() {
 }
 animate();
 
-// Resize
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Keyboard: left/right arrows to scrub
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'ArrowRight') { slider.value = Math.min(+slider.value + 1, +slider.max); showIteration(+slider.value); }
-  if (e.key === 'ArrowLeft') { slider.value = Math.max(+slider.value - 1, 0); showIteration(+slider.value); }
+  if (e.key === 'ArrowRight') { slider.value = Math.min(+slider.value+1, +slider.max); showIteration(+slider.value); }
+  if (e.key === 'ArrowLeft') { slider.value = Math.max(+slider.value-1, 0); showIteration(+slider.value); }
 });
 </script>
 </body>
