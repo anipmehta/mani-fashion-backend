@@ -298,3 +298,74 @@ class ParametricBodyModelBuilder:
             lines.append(f"f {f[0]+1} {f[1]+1} {f[2]+1}")
         return "\n".join(lines) + "\n"
 
+    @staticmethod
+    def export_pattern_obj(sloper: "BodiceSloper") -> str:
+        """Export bodice sloper pattern pieces as a flat OBJ mesh.
+
+        Lays out front and back bodice pieces side-by-side on the XY plane
+        (z=0).  Each piece is triangulated as a fan from its centroid.
+        Dart lines are included as additional edges.
+
+        The resulting ``.obj`` can be opened in Blender, MeshLab, or any
+        3-D viewer to inspect the 2-D pattern shapes.
+        """
+        lines: list[str] = []
+        lines.append("# MANI Agentic Pattern Engine — bodice sloper pattern pieces")
+        vertex_offset = 0
+
+        for idx, (piece, x_shift) in enumerate([
+            (sloper.front_bodice, 0.0),
+            (sloper.back_bodice, 60.0),  # offset back piece to the right
+        ]):
+            lines.append(f"o {piece.label.replace(' ', '_')}")
+
+            # Outline vertices (skip duplicate closing point)
+            outline = piece.outline
+            if (outline[0].x == outline[-1].x and outline[0].y == outline[-1].y):
+                outline = outline[:-1]
+
+            pts = [(p.x + x_shift, p.y) for p in outline]
+            n = len(pts)
+
+            # Centroid for fan triangulation
+            cx = sum(p[0] for p in pts) / n
+            cy = sum(p[1] for p in pts) / n
+
+            # Emit centroid vertex first
+            lines.append(f"v {cx:.6f} {cy:.6f} 0.000000")
+            centroid_idx = vertex_offset + 1  # OBJ is 1-based
+
+            # Emit outline vertices
+            for px, py in pts:
+                lines.append(f"v {px:.6f} {py:.6f} 0.000000")
+
+            # Fan triangles from centroid
+            for i in range(n):
+                v1 = vertex_offset + 2 + i          # outline vertex i
+                v2 = vertex_offset + 2 + ((i + 1) % n)  # outline vertex i+1
+                lines.append(f"f {centroid_idx} {v1} {v2}")
+
+            # Dart lines as degenerate faces (visual guides)
+            dart_base = vertex_offset + 1 + n + 1
+            for dart in piece.darts:
+                # Emit dart apex and two leg endpoints
+                apex_x = dart.apex.x + x_shift
+                apex_y = dart.apex.y
+                import math
+                half_angle = math.radians(dart.angle / 2.0)
+                leg1_x = apex_x + dart.length * math.cos(half_angle)
+                leg1_y = apex_y + dart.length * math.sin(half_angle)
+                leg2_x = apex_x + dart.length * math.cos(-half_angle)
+                leg2_y = apex_y + dart.length * math.sin(-half_angle)
+
+                lines.append(f"v {apex_x:.6f} {apex_y:.6f} 0.100000")
+                lines.append(f"v {leg1_x:.6f} {leg1_y:.6f} 0.100000")
+                lines.append(f"v {leg2_x:.6f} {leg2_y:.6f} 0.100000")
+                lines.append(f"f {dart_base} {dart_base+1} {dart_base+2}")
+                dart_base += 3
+
+            vertex_offset = dart_base - 1
+
+        return "\n".join(lines) + "\n"
+
+
