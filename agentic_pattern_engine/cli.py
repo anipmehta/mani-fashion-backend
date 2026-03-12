@@ -199,16 +199,24 @@ def main(argv: list[str] | None = None) -> int:
         pdf_path.write_bytes(result.pdf_bytes)
         print(f"PDF: {pdf_path}")
 
-    # Export 3D body model as OBJ for viewing in Blender / MeshLab
+    # Export 3D body model + pattern pieces as OBJ
     try:
         builder = ParametricBodyModelBuilder()
         body_model = builder.build(profile)
-        obj_str = builder.export_obj(body_model)
         obj_path = out / "body_model.obj"
-        obj_path.write_text(obj_str)
-        print(f"3D Model (OBJ): {obj_path}")
+        obj_path.write_text(builder.export_obj(body_model))
+        print(f"3D Body (OBJ): {obj_path}")
     except Exception as e:
-        print(f"OBJ export skipped: {e}")
+        print(f"Body OBJ export skipped: {e}")
+
+    if result.final_sloper:
+        try:
+            pattern_obj = ParametricBodyModelBuilder.export_pattern_obj(result.final_sloper)
+            pattern_path = out / "pattern.obj"
+            pattern_path.write_text(pattern_obj)
+            print(f"Pattern (OBJ): {pattern_path}")
+        except Exception as e:
+            print(f"Pattern OBJ export skipped: {e}")
 
     return 0
 
