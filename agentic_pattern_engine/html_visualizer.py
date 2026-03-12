@@ -134,10 +134,12 @@ def _compute_dart_lines_3d(
 ) -> list[dict]:
     """Compute 3D V-shaped dart lines on the front bodice garment surface.
 
-    Places the apex on the garment surface and draws short V-legs that stay
-    clearly above the garment (and body) mesh.  Legs interpolate between
-    the apex ring and the next ring down, stopping at 60 % of the way so
-    they never reach the wider hip ring where they'd clip into the body.
+    On a bodice top, darts take in fullness at the waist edge.  The V
+    opens at the waist hem and the apex points UP into the body of the
+    garment (toward the bust).
+
+    Bust dart:  apex at bust level, legs go UP toward shoulder ring.
+    Waist dart: apex near waist level, legs go UP toward bust ring.
 
     Coordinate mapping (from body_model_builder):
       vertex 0 in each ring  → theta=0   → CF  (+x, z=0)
@@ -182,14 +184,15 @@ def _compute_dart_lines_3d(
                 apex_pt = apex_pt + (radial / rn) * NUDGE
 
             # --- Leg endpoints ---
-            # Legs go partway toward the next ring DOWN (lower y).
-            # We interpolate 60 % of the way so the V stays short and
-            # never reaches ring 0 (hip) where the body is widest.
+            # On a bodice, dart legs point UPWARD (toward higher ring).
+            # Bust dart (ring 2): legs go toward ring 3 (shoulder).
+            # Waist dart (ring 1): legs go toward ring 2 (bust).
             half_angle_verts = max(1, int(round(
                 math.radians(dart.angle / 2.0) / (2.0 * math.pi) * pts_per_ring
             )))
 
-            leg_ring = max(0, ring_idx - 1)
+            leg_ring = min(n_rings - 1, ring_idx + 1)
+
             leg1_offset = max(0, min(vert_offset + half_angle_verts, qtr))
             leg2_offset = max(0, min(vert_offset - half_angle_verts, qtr))
 
