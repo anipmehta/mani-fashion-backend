@@ -49,7 +49,9 @@ def _build_garment_shell_for_iteration(
     for ri, yv in enumerate(y_values):
         t = ri / max(n_rings - 1, 1)
         if t < 0.4:
+            # Ensure a minimum ease at ring 0 (hip) so garment clears the body
             ease = waist_ease * (t / 0.4)
+            ease = max(ease, 0.3)  # at least 0.3 cm ease everywhere
         elif t < 0.8:
             ease = waist_ease + (bust_ease - waist_ease) * ((t - 0.4) / 0.4)
         else:
@@ -130,115 +132,97 @@ def _compute_dart_lines_3d(
     y_range: float,
     profile: "MeasurementProfile",
 ) -> list[dict]:
-    """Compute 3D V-shaped dart lines for front and back bodice.
+    """Compute 3D V-shaped dart lines on the front bodice garment surface.
 
-    Each dart is returned as {"label": str, "apex": [x,y,z],
-    "leg1": [x,y,z], "leg2": [x,y,z], "side": "front"|"back"}.
+    Places the apex on the garment surface and draws short V-legs that stay
+    clearly above the garment (and body) mesh.  Legs interpolate between
+    the apex ring and the next ring down, stopping at 60 % of the way so
+    they never reach the wider hip ring where they'd clip into the body.
+
+    Coordinate mapping (from body_model_builder):
+      vertex 0 in each ring  → theta=0   → CF  (+x, z=0)
+      vertex pts_per_ring//4 → theta=90  → side seam
+      vertex pts_per_ring//2 → theta=180 → CB
+    Ring layout: 0=hip, 1=waist, 2=bust, 3=shoulder.
     """
     results: list[dict] = []
     torso_length = profile.torso_length
+    qtr = pts_per_ring // 4  # vertices from CF to side seam
 
-    for side, piece, labels in [
-        ("front", sloper.front_bodice, ["Front bust dart", "Front waist dart"]),
+    # Outward nudge so dart lines sit clearly above the garment surface
+    NUDGE = 1.2  # cm
+
+    for piece, labels in [
+        (sloper.front_bodice, ["Front bust dart", "Front waist dart"]),
     ]:
         width_2d = piece.outline[2].x if len(piece.outline) > 2 else 10.0
         for di, dart in enumerate(piece.darts):
-            label = labels[di] if di < len(labels) else f"{side} dart {di+1}"
+            label = labels[di] if di < len(labels) else f"Front dart {di+1}"
 
-            # Map 2D apex y to 3D ring index.
-            # 2D pattern: y=0 at neckline (top), y=-torso_length at waist (bottom).
-            # 3D body rings: 0=hip, 1=waist, 2=bust, 3=shoulder.
-            # A bodice covers shoulder-to-waist, so map 2D range onto
-            # rings [n_rings-1 .. 1] (shoulder..waist), never hip ring 0.
+            # --- Map 2D apex to 3D ring + vertex offset ---
             frac_from_top = min(max(-dart.apex.y / torso_length, 0.0), 1.0)
-            ring_idx = int(round(
-                (n_rings - 1) - frac_from_top * (n_rings - 2)
-            ))
+            ring_float = (n_rings - 1) - frac_from_top * (n_rings - 2)
+            ring_idx = int(round(ring_float))
             ring_idx = max(1, min(ring_idx, n_rings - 1))
 
-            # Map 2D apex x to angular position within the ring
-            # Front: CF=vertex 0, side seam=pts_per_ring//4
+            # 2D x_frac: 0=CF, 1=side seam → vertex offset 0..qtr
             x_frac = min(max(dart.apex.x / width_2d, 0.0), 1.0) if width_2d > 0 else 0.5
-            if side == "front":
-                vert_in_ring = int(round(x_frac * (pts_per_ring // 4)))
+            vert_offset = int(round(x_frac * qtr))
+            vert_offset = max(0, min(vert_offset, qtr))
 
-            apex_vi = ring_idx * pts_per_ring + max(0, min(vert_in_ring, pts_per_ring - 1))
+            apex_vi = ring_idx * pts_per_ring + vert_offset
             if apex_vi >= len(garment_verts):
                 continue
-            apex_pt = garment_verts[apex_vi]
 
-            # Amplified leg length so dart V is clearly visible on the garment.
-            leg_len_3d = max(4.0, dart.length * 1.2)
-            half_angle_rad = math.radians(dart.angle / 2.0)
-
-            # Get tangent direction from neighboring vertex in the same ring
-            neighbor_offset = 1 if side == "front" else -1
-            neighbor_vi = ring_idx * pts_per_ring + max(0, min(
-                vert_in_ring + neighbor_offset, pts_per_ring - 1))
-            if neighbor_vi >= len(garment_verts):
-                neighbor_vi = apex_vi
-
-            n_pt = garment_verts[neighbor_vi]
-            tangent = np.array([n_pt[0] - apex_pt[0], 0.0, n_pt[2] - apex_pt[2]])
-            t_norm = np.linalg.norm(tangent)
-            if t_norm > 1e-6:
-                tangent = tangent / t_norm
-            else:
-                tangent = np.array([1.0, 0.0, 0.0])
-
-            # Dart legs always extend DOWNWARD from the apex on a bodice.
-            # Bust dart: apex at bust level, legs toward waist.
-            # Waist dart: apex near waist, legs toward hem edge.
-            primary_dir = np.array([0.0, -1.0, 0.0])
-
-            leg1_dir = primary_dir * math.cos(half_angle_rad) + tangent * math.sin(half_angle_rad)
-            leg2_dir = primary_dir * math.cos(half_angle_rad) - tangent * math.sin(half_angle_rad)
-
-            apex_arr = np.array(apex_pt)
-            leg1_end = apex_arr + leg1_dir * leg_len_3d
-            leg2_end = apex_arr + leg2_dir * leg_len_3d
-
-            # Clamp leg endpoints to stay within the garment y-range.
-            # Allow legs to extend to the hip (y_min) since waist darts
-            # open toward the hem edge.
-            for end_pt in (leg1_end, leg2_end):
-                end_pt[1] = max(y_min, min(end_pt[1], y_min + y_range))
-
-            # Push dart outward so it sits visibly on the garment surface.
-            # Find the maximum garment radius at this angular position
-            # across all rings, then offset to at least that radius + margin.
-            max_garment_r = 0.0
-            for ri in range(n_rings):
-                gvi = ri * pts_per_ring + max(0, min(vert_in_ring, pts_per_ring - 1))
-                if gvi < len(garment_verts):
-                    gpt = garment_verts[gvi]
-                    gr = math.sqrt(gpt[0] ** 2 + gpt[2] ** 2)
-                    if gr > max_garment_r:
-                        max_garment_r = gr
-
+            # --- Apex: garment vertex + outward nudge ---
+            apex_pt = np.array(garment_verts[apex_vi])
             radial = np.array([apex_pt[0], 0.0, apex_pt[2]])
             rn = np.linalg.norm(radial)
             if rn > 1e-6:
-                direction = radial / rn
-                current_r = rn
-                # Ensure dart sits outside the widest ring at this angle
-                needed_offset = max(0.5, max_garment_r - current_r + 0.5)
-                outward = direction * needed_offset
-                apex_arr = apex_arr + outward
-                leg1_end = leg1_end + outward
-                leg2_end = leg2_end + outward
+                apex_pt = apex_pt + (radial / rn) * NUDGE
+
+            # --- Leg endpoints ---
+            # Legs go partway toward the next ring DOWN (lower y).
+            # We interpolate 60 % of the way so the V stays short and
+            # never reaches ring 0 (hip) where the body is widest.
+            half_angle_verts = max(1, int(round(
+                math.radians(dart.angle / 2.0) / (2.0 * math.pi) * pts_per_ring
+            )))
+
+            leg_ring = max(0, ring_idx - 1)
+            leg1_offset = max(0, min(vert_offset + half_angle_verts, qtr))
+            leg2_offset = max(0, min(vert_offset - half_angle_verts, qtr))
+
+            leg1_vi = leg_ring * pts_per_ring + leg1_offset
+            leg2_vi = leg_ring * pts_per_ring + leg2_offset
+
+            if leg1_vi >= len(garment_verts) or leg2_vi >= len(garment_verts):
+                continue
+
+            leg1_full = np.array(garment_verts[leg1_vi])
+            leg2_full = np.array(garment_verts[leg2_vi])
+
+            # Interpolate: stop at 60 % of the way from apex to the
+            # full leg-ring vertex so the V is short and visible.
+            LEG_FRAC = 0.6
+            leg1_pt = apex_pt + LEG_FRAC * (leg1_full - apex_pt)
+            leg2_pt = apex_pt + LEG_FRAC * (leg2_full - apex_pt)
+
+            # Nudge legs outward too
+            for lpt in (leg1_pt, leg2_pt):
+                lr = np.array([lpt[0], 0.0, lpt[2]])
+                lrn = np.linalg.norm(lr)
+                if lrn > 1e-6:
+                    lpt += (lr / lrn) * NUDGE
 
             results.append({
-                "label": label, "side": side,
-                "apex": [round(float(v), 3) for v in apex_arr],
-                "leg1": [round(float(v), 3) for v in leg1_end],
-                "leg2": [round(float(v), 3) for v in leg2_end],
+                "label": label, "side": "front",
+                "apex": [round(float(v), 3) for v in apex_pt],
+                "leg1": [round(float(v), 3) for v in leg1_pt],
+                "leg2": [round(float(v), 3) for v in leg2_pt],
             })
 
-    # Mirror all darts to the opposite side.
-    # The body cylinder has left/right symmetry across the z=0 plane:
-    #   CF at +x, CB at -x, right side at +z, left side at -z.
-    # So mirroring flips z, not x.
+    # Mirror right-side darts to left side (flip z, not x).
     mirrored = []
     for d in results:
         mirrored.append({
