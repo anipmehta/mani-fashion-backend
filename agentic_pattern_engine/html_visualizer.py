@@ -158,9 +158,10 @@ def _compute_dart_lines_3d(
             if side == "front":
                 vert_in_ring = int(round(x_frac * (pts_per_ring // 4)))
             else:
-                # Back: x=0 is CB (vertex pts_per_ring//2), x=width is side seam
-                # Map so x_frac=0 -> CB, x_frac=1 -> side seam (pts_per_ring//4)
-                vert_in_ring = pts_per_ring // 2 + int(round(x_frac * (pts_per_ring // 4)))
+                # Back: x=0 is CB (vertex pts_per_ring//2), x=width is side seam.
+                # Go from CB toward the right side seam (decreasing vertex index
+                # toward pts_per_ring//4) so the dart lands on the +z (right) side.
+                vert_in_ring = pts_per_ring // 2 - int(round(x_frac * (pts_per_ring // 4)))
 
             apex_vi = ring_idx * pts_per_ring + max(0, min(vert_in_ring, pts_per_ring - 1))
             if apex_vi >= len(garment_verts):
@@ -211,14 +212,17 @@ def _compute_dart_lines_3d(
                 "leg2": [round(float(v), 3) for v in leg2_end],
             })
 
-    # Mirror all darts to the opposite side
+    # Mirror all darts to the opposite side.
+    # The body cylinder has left/right symmetry across the z=0 plane:
+    #   CF at +x, CB at -x, right side at +z, left side at -z.
+    # So mirroring flips z, not x.
     mirrored = []
     for d in results:
         mirrored.append({
             "label": d["label"] + " (L)", "side": d["side"],
-            "apex": [-d["apex"][0], d["apex"][1], d["apex"][2]],
-            "leg1": [-d["leg1"][0], d["leg1"][1], d["leg1"][2]],
-            "leg2": [-d["leg2"][0], d["leg2"][1], d["leg2"][2]],
+            "apex": [d["apex"][0], d["apex"][1], -d["apex"][2]],
+            "leg1": [d["leg1"][0], d["leg1"][1], -d["leg1"][2]],
+            "leg2": [d["leg2"][0], d["leg2"][1], -d["leg2"][2]],
         })
     results.extend(mirrored)
     return results
@@ -276,21 +280,14 @@ def generate_visualization(
     front_bust_x_frac = 0.6  # from _draft_front: bust_dart_apex x = width * 0.6
     front_princess_offset = max(1, int(round(front_bust_x_frac * (pts_per_ring // 4))))
 
-    back_width = profile.chest / 4.0 + 1.5  # approximate back width
-    back_dart_x_frac = (profile.shoulder_width / 2.0 * 0.5) / back_width if back_width > 0 else 0.3
-    back_princess_offset = max(1, int(round(back_dart_x_frac * (pts_per_ring // 4))))
-
     rp_line = [ring * pts_per_ring + front_princess_offset for ring in range(n_rings)]
     lp_line = [ring * pts_per_ring + pts_per_ring - front_princess_offset for ring in range(n_rings)]
-    rbp_line = [ring * pts_per_ring + pts_per_ring // 2 + back_princess_offset for ring in range(n_rings)]
-    lbp_line = [ring * pts_per_ring + pts_per_ring // 2 - back_princess_offset for ring in range(n_rings)]
 
     seam_lines = {
         "center_front": cf_line, "center_back": cb_line,
         "right_side": rs_line, "left_side": ls_line,
         "right_shoulder": r_shoulder, "left_shoulder": l_shoulder,
         "right_princess": rp_line, "left_princess": lp_line,
-        "right_back_princess": rbp_line, "left_back_princess": lbp_line,
     }
 
     iterations_data: list[dict] = []
@@ -638,8 +635,6 @@ if (SL) {
   if (SL.left_shoulder) seamLineObjects.push(createSeamLine(SL.left_shoulder, 0xbf360c, false));
   if (SL.right_princess) seamLineObjects.push(createSeamLine(SL.right_princess, 0x4a148c, true));
   if (SL.left_princess) seamLineObjects.push(createSeamLine(SL.left_princess, 0x4a148c, true));
-  if (SL.right_back_princess) seamLineObjects.push(createSeamLine(SL.right_back_princess, 0x4a148c, true));
-  if (SL.left_back_princess) seamLineObjects.push(createSeamLine(SL.left_back_princess, 0x4a148c, true));
 }
 
 function updateSeamLines(garmentVerts) {
