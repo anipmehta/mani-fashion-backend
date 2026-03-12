@@ -216,19 +216,25 @@ class MassSpringSimulationEngine:
     ) -> dict[str, float]:
         """Compute stress for each fit region based on garment vs body dimensions.
 
+        The simulation accounts for:
+        - Pattern outline dimensions (width/height)
+        - Ease values (bust_ease, waist_ease)
+        - Dart geometry: wider dart angles and longer darts provide more
+          fabric relief, reducing stress. This is the key feedback
+          mechanism that allows the self-correction loop to converge —
+          when the GeometryCorrector widens a dart, the simulation sees
+          lower stress on the next iteration.
+
         Returns a dict mapping region name to stress in Pascals.
         """
         chest = profile.chest
         waist = profile.waist
-        hip = profile.hip
         shoulder_width = profile.shoulder_width
 
         bust_ease = sloper.bust_ease
         waist_ease = sloper.waist_ease
 
         # Garment dimensions (from sloper pattern)
-        # The sloper is drafted as quarter-panels, so full garment width
-        # at bust = front_width * 2 + ease
         front_outline = sloper.front_bodice.outline
         back_outline = sloper.back_bodice.outline
 
@@ -236,12 +242,16 @@ class MassSpringSimulationEngine:
         back_width = self._pattern_width(back_outline)
         front_height = self._pattern_height(front_outline)
 
-        # Full garment circumference at bust level
-        garment_bust_circ = (front_width + back_width) * 2.0
+        # Full garment circumference at bust level, including ease
+        garment_bust_circ = (front_width + back_width) * 2.0 + bust_ease
         # Full garment circumference at waist level
-        garment_waist_circ = garment_bust_circ - (bust_ease - waist_ease) * 2.0
+        garment_waist_circ = (front_width + back_width) * 2.0 + waist_ease
 
-        # Compute dart relief: each dart reduces tension in its region
+        # --- Dart relief computation ---
+        # Each dart provides fabric relief proportional to its angle and
+        # length. This is the critical feedback path: when the corrector
+        # widens a dart angle, the relief increases, reducing stress.
+        # Relief is expressed in cm of effective circumference gain.
         total_front_dart_relief = sum(
             d.angle * d.length * 0.01  # proportional relief in cm
             for d in sloper.front_bodice.darts
@@ -250,40 +260,42 @@ class MassSpringSimulationEngine:
             d.angle * d.length * 0.01
             for d in sloper.back_bodice.darts
         )
+        total_dart_relief = total_front_dart_relief + total_back_dart_relief
+
+        # Effective garment circumferences after dart relief
+        effective_bust_circ = garment_bust_circ + total_front_dart_relief * 0.5
+        effective_waist_circ = garment_waist_circ + total_dart_relief * 0.3
 
         # --- Bust region ---
-        bust_stretch = chest / max(garment_bust_circ, 1e-6)
+        bust_stretch = chest / max(effective_bust_circ, 1e-6)
         bust_stress_raw = self.fabric_stiffness * abs(bust_stretch - 1.0)
-        # Dart relief reduces bust stress
+        # Additional dart relief factor (diminishing returns)
         dart_relief_factor = max(0.0, 1.0 - total_front_dart_relief / max(chest * 0.1, 1e-6))
         bust_stress = bust_stress_raw * dart_relief_factor
 
         # --- Waist region ---
-        waist_stretch = waist / max(garment_waist_circ, 1e-6)
+        waist_stretch = waist / max(effective_waist_circ, 1e-6)
         waist_stress = self.fabric_stiffness * abs(waist_stretch - 1.0)
 
         # --- Shoulder region ---
-        # Compare body shoulder width with pattern shoulder span
-        garment_shoulder = front_width + back_width  # approximate
+        garment_shoulder = front_width + back_width
         shoulder_stretch = shoulder_width / max(garment_shoulder, 1e-6)
         shoulder_stress = self.fabric_stiffness * abs(shoulder_stretch - 1.0) * 0.8
 
         # --- Armhole region ---
-        # Armhole stress correlates with bust-to-shoulder ratio mismatch
         bust_shoulder_ratio = chest / max(shoulder_width * 2.0, 1e-6)
         armhole_stress = self.fabric_stiffness * abs(bust_shoulder_ratio - 1.0) * 0.6
 
         # --- Side seam region ---
-        # Side seam stress from the difference between bust and waist
+        # Side seam stress from bust-waist differential, reduced by ease
         bust_waist_diff = abs(chest - waist) / max(chest, 1e-6)
-        side_seam_stress = self.fabric_stiffness * bust_waist_diff * 0.4
+        ease_relief = (bust_ease + waist_ease) / max(chest, 1e-6)
+        side_seam_stress = self.fabric_stiffness * max(0.0, bust_waist_diff - ease_relief) * 0.4
 
         # --- Center front ---
-        # Center front stress from bust fullness
         center_front_stress = bust_stress * 0.5
 
         # --- Center back ---
-        # Center back stress from shoulder dart relief
         center_back_stress = shoulder_stress * 0.3 + self.fabric_stiffness * abs(
             total_back_dart_relief / max(front_height, 1e-6)
         ) * 0.2
