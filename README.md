@@ -21,6 +21,11 @@ Measurements → Sloper Draft → Simulate → Detect Issues → Correct → Rep
 # Install
 pip install -e ".[dev]"
 
+# Run with a sample profile
+python -m agentic_pattern_engine.cli \
+    --profile sample_profiles/average_m.json \
+    --output-dir ./output --dump-iterations
+
 # Run with direct measurements (cm)
 python -m agentic_pattern_engine.cli \
     --chest 88 --waist 70 --hip 94 \
@@ -34,6 +39,25 @@ python -m agentic_pattern_engine.cli \
     --tight-thresholds --verbose \
     --output-dir ./output --dump-iterations
 ```
+
+## Sample Profiles
+
+Pre-built measurement profiles in `sample_profiles/`:
+
+| File | Body Type | Chest | Waist | Hip | Shoulder | Torso |
+|------|-----------|-------|-------|-----|----------|-------|
+| `petite_xs.json` | Petite (XS) | 76 | 60 | 84 | 34 | 40 |
+| `average_m.json` | Average (M) | 88 | 70 | 94 | 38 | 46 |
+| `athletic_m.json` | Athletic (M) | 92 | 72 | 90 | 40 | 48 |
+| `curvy_l.json` | Curvy (L) | 96 | 74 | 102 | 38 | 44 |
+| `plus_xl.json` | Plus (XL) | 108 | 86 | 112 | 42 | 48 |
+| `plus_2xl.json` | Plus (2XL) | 118 | 96 | 122 | 44 | 50 |
+| `high_differential.json` | High bust-waist diff | 100 | 68 | 104 | 36 | 44 |
+| `low_differential.json` | Straight/tubular | 85 | 80 | 92 | 38 | 46 |
+
+## Demo Results
+
+Pre-generated results for all sample profiles are in `demo_results/`. Each folder contains the full output (DXF, PDF, OBJ, visualization HTML, iteration snapshots). Open any `visualization.html` in a browser to see the 3D view with iteration slider.
 
 ## Output Files
 
