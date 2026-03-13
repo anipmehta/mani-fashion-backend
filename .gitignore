@@ -17,6 +17,8 @@ build/
 output/
 demo_output/
 demo_output_tight/
+demo_results/
+sample_profiles/
 
 # OS
 .DS_Store
