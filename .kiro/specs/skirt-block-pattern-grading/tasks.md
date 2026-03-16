@@ -6,17 +6,17 @@ Milestone 2 adds skirt block generation, pattern grading, and a garment-agnostic
 
 ## Tasks
 
-- [ ] 1. PR 1 — Bodice regression tests + coding standards steering file
-  - [ ] 1.1 Create coding standards steering file in `.kiro/steering/`
+- [x] 1. PR 1 — Bodice regression tests + coding standards steering file
+  - [x] 1.1 Create coding standards steering file in `.kiro/steering/`
     - Define Python style rules, test naming conventions, commit message format, and frozen file list
     - _Requirements: 9.6_
 
-  - [ ] 1.2 Create `tests/baselines/` directory and generate baseline JSON snapshots
+  - [x] 1.2 Create `tests/baselines/` directory and generate baseline JSON snapshots
     - Run existing bodice pipeline for 3 profiles (standard, plus, petite) and serialize output to `tests/baselines/bodice_standard.json`, `bodice_plus.json`, `bodice_petite.json`
     - Capture: front/back PatternPiece outlines, dart geometries, seam lines, bust_ease, waist_ease, convergence_status, iteration_count
     - _Requirements: 1.1, 1.2_
 
-  - [ ] 1.3 Implement `tests/test_bodice_regression.py` with snapshot and regression tests
+  - [x] 1.3 Implement `tests/test_bodice_regression.py` with snapshot and regression tests
     - Snapshot tests: serialize BodiceSloper to JSON, compare against stored baselines
     - Regression tests: assert all output fields match within 0.001 cm / 0.001 degrees tolerance
     - End-to-end test: run full Orchestrator loop, assert convergence status and iteration count match baseline
@@ -27,7 +27,7 @@ Milestone 2 adds skirt block generation, pattern grading, and a garment-agnostic
     - **Property 1: Bodice Serialization Determinism**
     - **Validates: Requirements 1.2**
 
-  - [ ] 1.5 Checkpoint — Ensure all tests pass
+  - [x] 1.5 Checkpoint — Ensure all tests pass
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 2. PR 2 — GarmentSpec abstraction + refactor orchestrator
