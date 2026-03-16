@@ -44,3 +44,11 @@ The following files are frozen and MUST NOT be modified under any circumstances:
 - `agentic_pattern_engine/audit_trail.py`
 
 Any garment-specific behavior from these files must be wrapped via delegation in new classes (e.g., `BodiceGarmentSpec`), never modified directly.
+
+## PR Workflow
+- After completing a PR branch, ALWAYS generate a `PR_DESCRIPTION_<branch>.md` file with:
+  - What the PR does (summary)
+  - Files added/modified
+  - Testing section (what tests were added, test count, pass status)
+  - Requirements traceability (which spec requirements are covered)
+- Use the branch name (kebab-case) as the suffix, e.g., `PR_DESCRIPTION_skirt-block-pr1.md`
