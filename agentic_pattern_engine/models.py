@@ -250,6 +250,7 @@ class AuditEntry:
     fit_issues: list[FitIssue]              # Empty for iteration 0
     corrections_applied: list[CorrectionStrategy]  # Empty for iteration 0
     total_stress_magnitude: float           # Sum of stress exceeding thresholds
+    pieces: list["PatternPiece"] | None = None  # garment-agnostic output
 
 
 @dataclass
@@ -283,6 +284,8 @@ class AgentRunResult:
     failed_at_iteration: int | None = None
     dxf_bytes: bytes | None = None
     pdf_bytes: bytes | None = None
+    final_pieces: list["PatternPiece"] | None = None
+    garment_type: str | None = None
 
 
 @dataclass(frozen=True)

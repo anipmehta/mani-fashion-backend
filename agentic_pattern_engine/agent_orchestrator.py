@@ -1,9 +1,12 @@
 """Agent Orchestrator — the core self-correction loop.
 
-Wires all components together: validate input → generate sloper →
+Wires all components together: validate input → generate pieces →
 build body model → loop (simulate → detect → check convergence →
 check limits → check stall → check oscillation → correct → update
-sloper → record) → export → return result.
+pieces → record) → export → return result.
+
+Accepts an optional GarmentSpec to operate on any garment type.
+Defaults to BodiceGarmentSpec for backward compatibility.
 """
 
 from __future__ import annotations
@@ -21,12 +24,14 @@ from agentic_pattern_engine.models import (
     AgentConfig,
     AgentRunResult,
     AuditEntry,
+    BodiceSloper,
     ConvergenceStatus,
     ExportMetadata,
     FitIssue,
     FitIssueType,
     FitRegion,
     MeasurementProfile,
+    TensionMap,
 )
 from agentic_pattern_engine.pdf_exporter import PDFPatternExporter
 from agentic_pattern_engine.simulation_engine import MassSpringSimulationEngine
@@ -38,6 +43,7 @@ class AgentOrchestrator:
 
     def __init__(
         self,
+        garment_spec: "GarmentSpec | None" = None,
         sloper_generator: ParsonsSloperGenerator | None = None,
         body_model_builder: ParametricBodyModelBuilder | None = None,
         simulation_engine: MassSpringSimulationEngine | None = None,
@@ -46,11 +52,23 @@ class AgentOrchestrator:
         dxf_exporter: DXFPatternExporter | None = None,
         pdf_exporter: PDFPatternExporter | None = None,
     ) -> None:
+        # Lazy import to avoid circular dependency
+        from agentic_pattern_engine.garment_spec import (
+            BodiceGarmentSpec,
+        )
+
+        self._spec = garment_spec or BodiceGarmentSpec()
         self._sloper_gen = sloper_generator or ParsonsSloperGenerator()
-        self._body_builder = body_model_builder or ParametricBodyModelBuilder()
-        self._sim_engine = simulation_engine or MassSpringSimulationEngine()
+        self._body_builder = (
+            body_model_builder or ParametricBodyModelBuilder()
+        )
+        self._sim_engine = (
+            simulation_engine or MassSpringSimulationEngine()
+        )
         self._fit_detector = fit_detector or TensionFitDetector()
-        self._corrector = geometry_corrector or DartEaseGeometryCorrector()
+        self._corrector = (
+            geometry_corrector or DartEaseGeometryCorrector()
+        )
         self._dxf_exporter = dxf_exporter or DXFPatternExporter()
         self._pdf_exporter = pdf_exporter or PDFPatternExporter()
 
@@ -66,7 +84,7 @@ class AgentOrchestrator:
         recorder = AuditTrailRecorder()
 
         # --- Phase 1: Input validation ---
-        profile_errors = profile.validate()
+        profile_errors = self._spec.validate_profile(profile)
         if profile_errors:
             return self._fail_result(
                 run_id, ConvergenceStatus.GENERATION_FAILED,
@@ -84,13 +102,16 @@ class AgentOrchestrator:
 
         # --- Phase 2: Generation ---
         try:
-            sloper = self._sloper_gen.generate(profile)
+            pieces = self._spec.generate_initial_pieces(profile)
             body_model = self._body_builder.build(profile)
         except Exception as e:
             return self._fail_result(
                 run_id, ConvergenceStatus.GENERATION_FAILED,
                 str(e), recorder, start_time,
             )
+
+        # Build a BodiceSloper for backward-compat audit/export
+        sloper = self._build_compat_sloper(pieces, profile)
 
         # Record iteration 0
         recorder.record(AuditEntry(
@@ -100,9 +121,11 @@ class AgentOrchestrator:
             fit_issues=[],
             corrections_applied=[],
             total_stress_magnitude=0.0,
+            pieces=list(pieces),
         ))
 
         # --- Phase 3: Self-correction loop ---
+        best_pieces = list(pieces)
         best_sloper = sloper
         best_stress = float("inf")
         stress_history: list[float] = []
@@ -111,13 +134,24 @@ class AgentOrchestrator:
         last_fit_issues: list[FitIssue] = []
 
         for iteration in range(1, cfg.iteration_limit + 1):
-            # Simulate
+            # Simulate — use spec's stress computation
             try:
-                sim_result = self._sim_engine.simulate(sloper, body_model)
+                regional_stresses = self._spec.compute_stress(
+                    pieces, profile,
+                )
+                sim_result = self._sim_engine.simulate(
+                    sloper, body_model,
+                )
+                # Override regional stresses with spec's values
+                sim_result.tension_map.regional_stresses = (
+                    regional_stresses
+                )
             except Exception as e:
                 return AgentRunResult(
                     run_id=run_id,
-                    convergence_status=ConvergenceStatus.SIMULATION_FAILED,
+                    convergence_status=(
+                        ConvergenceStatus.SIMULATION_FAILED
+                    ),
                     final_sloper=best_sloper,
                     total_iterations=iteration - 1,
                     audit_trail=recorder.get_trail(),
@@ -125,15 +159,21 @@ class AgentOrchestrator:
                     elapsed_time_ms=self._elapsed(start_time),
                     error_details=str(e),
                     failed_at_iteration=iteration,
+                    final_pieces=best_pieces,
+                    garment_type=self._spec.garment_type,
                 )
 
             # Detect fit issues
             fit_issues = self._fit_detector.detect(
-                sim_result.tension_map, body_model, cfg.tension_thresholds,
+                sim_result.tension_map,
+                body_model,
+                cfg.tension_thresholds,
             )
 
             # Compute total stress magnitude
-            total_stress = sum(i.violation_magnitude for i in fit_issues)
+            total_stress = sum(
+                i.violation_magnitude for i in fit_issues
+            )
 
             # Record audit entry
             recorder.record(AuditEntry(
@@ -141,14 +181,16 @@ class AgentOrchestrator:
                 sloper=sloper,
                 tension_map=sim_result.tension_map,
                 fit_issues=fit_issues,
-                corrections_applied=[],  # filled below if corrections applied
+                corrections_applied=[],
                 total_stress_magnitude=total_stress,
+                pieces=list(pieces),
             ))
 
-            # Track best sloper
+            # Track best
             if total_stress < best_stress:
                 best_stress = total_stress
                 best_sloper = sloper
+                best_pieces = list(pieces)
 
             stress_history.append(total_stress)
             issue_history.append(fit_issues)
@@ -158,51 +200,92 @@ class AgentOrchestrator:
             if len(fit_issues) == 0:
                 return self._success_result(
                     run_id, ConvergenceStatus.CONVERGED,
-                    sloper, iteration, recorder, profile,
-                    [], start_time,
+                    sloper, pieces, iteration, recorder,
+                    profile, [], start_time,
                 )
 
             # --- Check stall ---
-            if self._is_stalled(stress_history, cfg.stall_threshold):
+            if self._is_stalled(
+                stress_history, cfg.stall_threshold,
+            ):
                 return self._success_result(
                     run_id, ConvergenceStatus.STALLED,
-                    best_sloper, iteration, recorder, profile,
-                    fit_issues, start_time,
+                    best_sloper, best_pieces, iteration,
+                    recorder, profile, fit_issues, start_time,
                 )
 
             # --- Check oscillation ---
             if self._detect_oscillation(issue_history):
-                dampening_factor *= cfg.oscillation_dampening_factor
+                dampening_factor *= (
+                    cfg.oscillation_dampening_factor
+                )
 
-            # --- Apply corrections ---
-            corrections = self._corrector.plan_corrections(
-                fit_issues, sloper, profile, dampening_factor,
+            # --- Apply corrections via spec ---
+            corrections = self._spec.plan_corrections(
+                fit_issues, pieces, profile, dampening_factor,
             )
 
             # Update the last audit entry with corrections
             trail = recorder.get_trail()
             trail.entries[-1].corrections_applied = corrections
 
-            sloper = self._corrector.apply_to_sloper(sloper, corrections)
+            pieces = self._spec.apply_corrections(
+                pieces, corrections,
+            )
+            sloper = self._build_compat_sloper(pieces, profile)
 
         # Iteration limit reached
         return self._success_result(
             run_id, ConvergenceStatus.ITERATION_LIMIT_REACHED,
-            best_sloper, cfg.iteration_limit, recorder, profile,
-            last_fit_issues, start_time,
+            best_sloper, best_pieces, cfg.iteration_limit,
+            recorder, profile, last_fit_issues, start_time,
         )
 
     # ------------------------------------------------------------------
     # Helper methods
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _is_stalled(stress_history: list[float], threshold: int) -> bool:
-        """Detect stall: no meaningful improvement over N iterations.
+    def _build_compat_sloper(
+        self,
+        pieces: list,
+        profile: MeasurementProfile,
+    ) -> BodiceSloper:
+        """Build a BodiceSloper from pieces for backward compat.
 
-        Compares the oldest and newest values in the window.  If the
-        total drop is less than 0.5 Pa the loop is considered stalled.
+        For bodice garments this reconstructs a proper sloper.
+        For non-bodice garments it creates a minimal wrapper so
+        existing export / audit code doesn't break.
         """
+        from agentic_pattern_engine.garment_spec import (
+            BodiceGarmentSpec,
+        )
+
+        if isinstance(self._spec, BodiceGarmentSpec):
+            if self._spec._last_sloper is not None:
+                return self._spec._last_sloper
+            # Fallback: generate fresh
+            return self._sloper_gen.generate(profile)
+
+        # Non-bodice: create a minimal BodiceSloper wrapper
+        front = pieces[0] if len(pieces) > 0 else None
+        back = pieces[1] if len(pieces) > 1 else front
+        if front is None:
+            return self._sloper_gen.generate(profile)
+        return BodiceSloper(
+            sloper_id="compat",
+            profile=profile,
+            front_bodice=front,
+            back_bodice=back,
+            bust_ease=0.0,
+            waist_ease=0.0,
+            metadata={"garment_type": self._spec.garment_type},
+        )
+
+    @staticmethod
+    def _is_stalled(
+        stress_history: list[float], threshold: int,
+    ) -> bool:
+        """Detect stall: no meaningful improvement over N iterations."""
         if len(stress_history) < threshold:
             return False
         recent = stress_history[-threshold:]
@@ -210,8 +293,11 @@ class AgentOrchestrator:
         return improvement < 0.5
 
     @staticmethod
-    def _detect_oscillation(issue_history: list[list[FitIssue]]) -> bool:
-        """Detect oscillation: a region alternating between excess and insufficient."""
+    def _detect_oscillation(
+        issue_history: list[list[FitIssue]],
+    ) -> bool:
+        """Detect oscillation: a region alternating between
+        excess and insufficient."""
         if len(issue_history) < 2:
             return False
         prev = issue_history[-2]
@@ -228,8 +314,14 @@ class AgentOrchestrator:
             if region in curr_map:
                 p, c = prev_map[region], curr_map[region]
                 if (
-                    (p == FitIssueType.EXCESS_TENSION and c == FitIssueType.INSUFFICIENT_TENSION)
-                    or (p == FitIssueType.INSUFFICIENT_TENSION and c == FitIssueType.EXCESS_TENSION)
+                    (
+                        p == FitIssueType.EXCESS_TENSION
+                        and c == FitIssueType.INSUFFICIENT_TENSION
+                    )
+                    or (
+                        p == FitIssueType.INSUFFICIENT_TENSION
+                        and c == FitIssueType.EXCESS_TENSION
+                    )
                 ):
                     return True
         return False
@@ -238,7 +330,8 @@ class AgentOrchestrator:
         self,
         run_id: str,
         status: ConvergenceStatus,
-        sloper,
+        sloper: BodiceSloper,
+        pieces: list,
         total_iterations: int,
         recorder: AuditTrailRecorder,
         profile: MeasurementProfile,
@@ -248,7 +341,8 @@ class AgentOrchestrator:
         """Build a successful AgentRunResult with exports."""
         metadata = ExportMetadata(
             profile_hash=hashlib.md5(
-                f"{profile.chest}{profile.waist}{profile.hip}".encode()
+                f"{profile.chest}{profile.waist}{profile.hip}"
+                .encode()
             ).hexdigest()[:8],
             run_id=run_id,
             iteration_count=total_iterations,
@@ -258,8 +352,12 @@ class AgentOrchestrator:
         dxf_bytes = None
         pdf_bytes = None
         try:
-            dxf_bytes = self._dxf_exporter.export(sloper, metadata)
-            pdf_bytes = self._pdf_exporter.export(sloper, metadata, profile)
+            dxf_bytes = self._dxf_exporter.export(
+                sloper, metadata,
+            )
+            pdf_bytes = self._pdf_exporter.export(
+                sloper, metadata, profile,
+            )
         except Exception:
             pass  # Export errors don't fail the run
 
@@ -273,6 +371,8 @@ class AgentOrchestrator:
             elapsed_time_ms=self._elapsed(start_time),
             dxf_bytes=dxf_bytes,
             pdf_bytes=pdf_bytes,
+            final_pieces=list(pieces),
+            garment_type=self._spec.garment_type,
         )
 
     def _fail_result(
@@ -293,6 +393,7 @@ class AgentOrchestrator:
             remaining_fit_issues=[],
             elapsed_time_ms=self._elapsed(start_time),
             error_details=error,
+            garment_type=self._spec.garment_type,
         )
 
     @staticmethod
