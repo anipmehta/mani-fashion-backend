@@ -23,5 +23,8 @@ sample_profiles/
 # OS
 .DS_Store
 
+# PR descriptions
+PR_DESCRIPTION*.md
+
 # Kiro
 .kiro/
