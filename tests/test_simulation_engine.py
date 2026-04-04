@@ -69,3 +69,71 @@ def test_simulation_determinism(profile):
         r1.tension_map.collision_vertices,
         r2.tension_map.collision_vertices,
     )
+
+
+# ---------------------------------------------------------------------------
+# PR 3: stress_fn callable injection tests
+# ---------------------------------------------------------------------------
+
+from tests.conftest import SAMPLE_PROFILES
+
+
+def test_simulation_engine_stress_fn_callable_used() -> None:
+    """When stress_fn is provided, simulate uses it instead of
+    _compute_regional_stresses."""
+    profile = SAMPLE_PROFILES["medium"]
+    gen = ParsonsSloperGenerator()
+    builder = ParametricBodyModelBuilder()
+    sim = MassSpringSimulationEngine()
+
+    sloper = gen.generate(profile)
+    body_model = builder.build(profile)
+
+    custom_stresses = {"bust": 99.0, "waist": 88.0}
+
+    def fake_stress_fn(pieces, prof):
+        return custom_stresses
+
+    result = sim.simulate(sloper, body_model, stress_fn=fake_stress_fn)
+    assert result.tension_map.regional_stresses == custom_stresses
+
+
+def test_simulation_engine_stress_fn_none_uses_default() -> None:
+    """When stress_fn is None, simulate uses the built-in
+    _compute_regional_stresses (bodice default)."""
+    profile = SAMPLE_PROFILES["medium"]
+    gen = ParsonsSloperGenerator()
+    builder = ParametricBodyModelBuilder()
+    sim = MassSpringSimulationEngine()
+
+    sloper = gen.generate(profile)
+    body_model = builder.build(profile)
+
+    result = sim.simulate(sloper, body_model, stress_fn=None)
+    regional = result.tension_map.regional_stresses
+    assert regional is not None
+    assert "bust" in regional
+    assert "waist" in regional
+
+
+def test_simulation_engine_stress_fn_receives_pieces() -> None:
+    """stress_fn receives the front/back pieces from the sloper."""
+    profile = SAMPLE_PROFILES["medium"]
+    gen = ParsonsSloperGenerator()
+    builder = ParametricBodyModelBuilder()
+    sim = MassSpringSimulationEngine()
+
+    sloper = gen.generate(profile)
+    body_model = builder.build(profile)
+
+    captured = {}
+
+    def spy_stress_fn(pieces, prof):
+        captured["pieces"] = pieces
+        captured["profile"] = prof
+        return {"bust": 0.0}
+
+    sim.simulate(sloper, body_model, stress_fn=spy_stress_fn)
+    assert len(captured["pieces"]) == 2
+    assert captured["pieces"][0].piece_id == "front_bodice"
+    assert captured["profile"] is profile

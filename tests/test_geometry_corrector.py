@@ -11,6 +11,7 @@ from hypothesis.strategies import composite
 
 from agentic_pattern_engine.geometry_corrector import DartEaseGeometryCorrector, _PRIORITY
 from agentic_pattern_engine.models import (
+    CorrectionStrategy,
     CorrectionType,
     FitIssueType,
 )
@@ -89,3 +90,80 @@ def test_correction_geometric_validity(profile):
     assert abs(updated.waist_ease - sloper.waist_ease) <= 2.0, (
         f"Waist ease changed by {abs(updated.waist_ease - sloper.waist_ease):.2f}cm"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR 3: correction callable injection tests
+# ---------------------------------------------------------------------------
+
+from agentic_pattern_engine.models import (
+    BodiceSloper,
+    FitIssue,
+    FitIssueType,
+    FitRegion,
+    MeasurementProfile,
+)
+from tests.conftest import SAMPLE_PROFILES
+
+
+def test_geometry_corrector_plan_fn_callable_used() -> None:
+    """When plan_corrections_fn is provided, it is used instead of
+    the default bodice logic."""
+    custom_corrections = [
+        CorrectionStrategy(
+            target_region=FitRegion.BUST,
+            issue_type=FitIssueType.EXCESS_TENSION,
+            correction_type=CorrectionType.ADJUST_DART_ANGLE,
+            magnitude=5.0,
+            dampening_factor=1.0,
+        ),
+    ]
+
+    def fake_plan(issues, sloper, profile, df):
+        return custom_corrections
+
+    corrector = DartEaseGeometryCorrector(plan_corrections_fn=fake_plan)
+    profile = SAMPLE_PROFILES["medium"]
+    sloper = _generator.generate(profile)
+    issues = [
+        FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                 100.0, 60.0, 40.0),
+    ]
+
+    result = corrector.plan_corrections(issues, sloper, profile)
+    assert result is custom_corrections
+
+
+def test_geometry_corrector_apply_fn_callable_used() -> None:
+    """When apply_corrections_fn is provided, it is used instead of
+    the default bodice logic."""
+    profile = SAMPLE_PROFILES["medium"]
+    sloper = _generator.generate(profile)
+    sentinel = object()
+
+    def fake_apply(s, corrections):
+        return sentinel
+
+    corrector = DartEaseGeometryCorrector(
+        apply_corrections_fn=fake_apply,
+    )
+    result = corrector.apply_to_sloper(sloper, [])
+    assert result is sentinel
+
+
+def test_geometry_corrector_no_callables_uses_default() -> None:
+    """When no callables are provided, the default bodice logic is used."""
+    corrector = DartEaseGeometryCorrector()
+    profile = SAMPLE_PROFILES["medium"]
+    sloper = _generator.generate(profile)
+    issues = [
+        FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                 100.0, 60.0, 40.0),
+    ]
+
+    corrections = corrector.plan_corrections(issues, sloper, profile)
+    assert len(corrections) > 0
+
+    updated = corrector.apply_to_sloper(sloper, corrections)
+    assert updated.front_bodice is not None
+    assert updated.back_bodice is not None
