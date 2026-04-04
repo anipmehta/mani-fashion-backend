@@ -192,3 +192,257 @@ def test_full_run_with_exports():
         assert result.pdf_bytes is not None
         assert len(result.dxf_bytes) > 0
         assert len(result.pdf_bytes) > 0
+
+
+# ---------------------------------------------------------------------------
+# PR review feedback: unit tests for orchestrator internals
+# ---------------------------------------------------------------------------
+
+from agentic_pattern_engine.garment_spec import BodiceGarmentSpec
+from agentic_pattern_engine.models import (
+    BodiceSloper,
+    DartGeometry,
+    FitIssue,
+    FitIssueType,
+    FitRegion,
+    Line2D,
+    PatternPiece,
+    Point2D,
+)
+
+
+# --- __init__ default spec wiring ---
+
+
+def test_agent_orchestrator_default_spec_is_bodice() -> None:
+    """Orchestrator with no garment_spec defaults to BodiceGarmentSpec."""
+    orch = AgentOrchestrator()
+    assert isinstance(orch._spec, BodiceGarmentSpec)
+
+
+def test_agent_orchestrator_custom_spec_is_used() -> None:
+    """Orchestrator uses the provided garment_spec instead of default."""
+    spec = BodiceGarmentSpec()
+    orch = AgentOrchestrator(garment_spec=spec)
+    assert orch._spec is spec
+
+
+# --- _build_compat_sloper ---
+
+
+def test_agent_orchestrator_build_compat_sloper_bodice_cached() -> None:
+    """When BodiceGarmentSpec has a cached _last_sloper,
+    _build_compat_sloper returns it."""
+    spec = BodiceGarmentSpec()
+    profile = SAMPLE_PROFILES["medium"]
+    pieces = spec.generate_initial_pieces(profile)
+    cached_sloper = spec._last_sloper
+    assert cached_sloper is not None
+
+    orch = AgentOrchestrator(garment_spec=spec)
+    result = orch._build_compat_sloper(pieces, profile)
+    assert result is cached_sloper
+
+
+def test_agent_orchestrator_build_compat_sloper_bodice_fallback() -> None:
+    """When BodiceGarmentSpec has no cached sloper,
+    _build_compat_sloper generates a fresh one."""
+    spec = BodiceGarmentSpec()
+    assert spec._last_sloper is None
+
+    profile = SAMPLE_PROFILES["medium"]
+    orch = AgentOrchestrator(garment_spec=spec)
+    pieces = spec.generate_initial_pieces(profile)
+    spec._last_sloper = None  # force no cache
+
+    result = orch._build_compat_sloper(pieces, profile)
+    assert result is not None
+    assert result.sloper_id is not None
+    assert result.front_bodice is not None
+    assert result.back_bodice is not None
+
+
+def test_agent_orchestrator_build_compat_sloper_non_bodice_wrapper() -> None:
+    """For a non-BodiceGarmentSpec, _build_compat_sloper creates
+    a minimal BodiceSloper wrapper from the pieces."""
+
+    class FakeSkirtSpec:
+        garment_type = "skirt"
+        measurement_fields = ["waist", "hip"]
+        fit_regions = ["hip", "waist"]
+        tension_thresholds = {"hip": 50.0, "waist": 45.0}
+
+        def validate_profile(self, profile):
+            return []
+
+        def generate_initial_pieces(self, profile):
+            return []
+
+        def compute_stress(self, pieces, profile):
+            return {}
+
+        def plan_corrections(self, issues, pieces, profile, df):
+            return []
+
+        def apply_corrections(self, pieces, corrections):
+            return pieces
+
+        def validate_geometry(self, pieces):
+            return []
+
+    profile = SAMPLE_PROFILES["medium"]
+    orch = AgentOrchestrator(garment_spec=FakeSkirtSpec())
+
+    outline = (
+        Point2D(0, 0), Point2D(10, 0),
+        Point2D(10, 20), Point2D(0, 0),
+    )
+    dart = DartGeometry(apex=Point2D(5, 10), angle=15.0, length=8.0)
+    grain = Line2D(start=Point2D(5, 0), end=Point2D(5, 20))
+    front = PatternPiece(
+        piece_id="front_skirt", label="Front Skirt",
+        outline=outline, seam_lines=(), darts=(dart,),
+        grain_line=grain, notch_marks=(Point2D(5, 0),),
+        seam_allowance=1.5,
+    )
+    back = PatternPiece(
+        piece_id="back_skirt", label="Back Skirt",
+        outline=outline, seam_lines=(), darts=(dart,),
+        grain_line=grain, notch_marks=(Point2D(5, 0),),
+        seam_allowance=1.5,
+    )
+
+    result = orch._build_compat_sloper([front, back], profile)
+    assert isinstance(result, BodiceSloper)
+    assert result.sloper_id == "compat"
+    assert result.front_bodice is front
+    assert result.back_bodice is back
+    assert result.bust_ease == 0.0
+    assert result.waist_ease == 0.0
+    assert result.metadata["garment_type"] == "skirt"
+
+
+def test_agent_orchestrator_build_compat_sloper_non_bodice_empty() -> None:
+    """For non-bodice spec with empty pieces list,
+    _build_compat_sloper falls back to generating a fresh sloper."""
+
+    class FakeSpec:
+        garment_type = "skirt"
+        measurement_fields = ["waist"]
+        fit_regions = ["waist"]
+        tension_thresholds = {"waist": 45.0}
+
+        def validate_profile(self, p):
+            return []
+
+        def generate_initial_pieces(self, p):
+            return []
+
+        def compute_stress(self, pieces, p):
+            return {}
+
+        def plan_corrections(self, i, pieces, p, d):
+            return []
+
+        def apply_corrections(self, pieces, c):
+            return pieces
+
+        def validate_geometry(self, pieces):
+            return []
+
+    profile = SAMPLE_PROFILES["medium"]
+    orch = AgentOrchestrator(garment_spec=FakeSpec())
+    result = orch._build_compat_sloper([], profile)
+    assert result is not None
+    assert result.front_bodice is not None
+
+
+# --- _detect_oscillation flip logic ---
+
+
+def test_agent_orchestrator_oscillation_insufficient_to_excess() -> None:
+    """Oscillation detected: insufficient → excess flip."""
+    history = [
+        [FitIssue(FitRegion.BUST, FitIssueType.INSUFFICIENT_TENSION,
+                  50, 500, 25)],
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  600, 500, 100)],
+    ]
+    assert AgentOrchestrator._detect_oscillation(history)
+
+
+def test_agent_orchestrator_oscillation_excess_to_insufficient() -> None:
+    """Oscillation detected: excess → insufficient flip."""
+    history = [
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  600, 500, 100)],
+        [FitIssue(FitRegion.BUST, FitIssueType.INSUFFICIENT_TENSION,
+                  50, 500, 25)],
+    ]
+    assert AgentOrchestrator._detect_oscillation(history)
+
+
+def test_agent_orchestrator_oscillation_same_type_no_flip() -> None:
+    """No oscillation when same issue type persists."""
+    history = [
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  600, 500, 100)],
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  550, 500, 50)],
+    ]
+    assert not AgentOrchestrator._detect_oscillation(history)
+
+
+def test_agent_orchestrator_oscillation_different_regions() -> None:
+    """No oscillation when different regions have different types."""
+    history = [
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  600, 500, 100)],
+        [FitIssue(FitRegion.WAIST, FitIssueType.INSUFFICIENT_TENSION,
+                  30, 50, 20)],
+    ]
+    assert not AgentOrchestrator._detect_oscillation(history)
+
+
+def test_agent_orchestrator_oscillation_pulling_no_flip() -> None:
+    """PULLING issue type does not trigger oscillation."""
+    history = [
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  600, 500, 100)],
+        [FitIssue(FitRegion.BUST, FitIssueType.PULLING,
+                  300, 500, 50)],
+    ]
+    assert not AgentOrchestrator._detect_oscillation(history)
+
+
+def test_agent_orchestrator_oscillation_multi_region_one_flips() -> None:
+    """Oscillation detected when at least one region flips."""
+    history = [
+        [
+            FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                     600, 500, 100),
+            FitIssue(FitRegion.WAIST, FitIssueType.EXCESS_TENSION,
+                     200, 150, 50),
+        ],
+        [
+            FitIssue(FitRegion.BUST, FitIssueType.INSUFFICIENT_TENSION,
+                     50, 500, 25),
+            FitIssue(FitRegion.WAIST, FitIssueType.EXCESS_TENSION,
+                     180, 150, 30),
+        ],
+    ]
+    assert AgentOrchestrator._detect_oscillation(history)
+
+
+def test_agent_orchestrator_oscillation_empty_history() -> None:
+    """Empty history returns no oscillation."""
+    assert not AgentOrchestrator._detect_oscillation([])
+
+
+def test_agent_orchestrator_oscillation_single_entry() -> None:
+    """Single entry returns no oscillation."""
+    history = [
+        [FitIssue(FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+                  600, 500, 100)],
+    ]
+    assert not AgentOrchestrator._detect_oscillation(history)

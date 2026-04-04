@@ -30,18 +30,18 @@ Milestone 2 adds skirt block generation, pattern grading, and a garment-agnostic
   - [x] 1.5 Checkpoint — Ensure all tests pass
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 2. PR 2 — GarmentSpec abstraction + refactor orchestrator
-  - [ ] 2.1 Create `agentic_pattern_engine/garment_spec.py` with `GarmentSpec` protocol
+- [x] 2. PR 2 — GarmentSpec abstraction + refactor orchestrator
+  - [x] 2.1 Create `agentic_pattern_engine/garment_spec.py` with `GarmentSpec` protocol
     - Define `typing.Protocol` with `garment_type`, `measurement_fields`, `fit_regions`, `tension_thresholds` properties
     - Define methods: `validate_profile`, `generate_initial_pieces`, `compute_stress`, `plan_corrections`, `apply_corrections`, `validate_geometry`
     - _Requirements: 2.1, 2.4, 2.5_
 
-  - [ ] 2.2 Implement `BodiceGarmentSpec` in `garment_spec.py`
+  - [x] 2.2 Implement `BodiceGarmentSpec` in `garment_spec.py`
     - Delegate to existing `ParsonsSloperGenerator`, bodice stress logic, and bodice correction logic
     - Do NOT modify frozen files — wrap existing classes
     - _Requirements: 2.2, 2.3_
 
-  - [ ] 2.3 Refactor `AgentOrchestrator` to accept optional `GarmentSpec` parameter
+  - [x] 2.3 Refactor `AgentOrchestrator` to accept optional `GarmentSpec` parameter
     - Default to `BodiceGarmentSpec` when no spec provided (backward compatibility)
     - Call `spec.generate_initial_pieces()` instead of direct sloper generator calls
     - Call `spec.compute_stress()` in the simulation step
@@ -49,7 +49,7 @@ Milestone 2 adds skirt block generation, pattern grading, and a garment-agnostic
     - Add `final_pieces` and `garment_type` fields to `AgentRunResult`
     - _Requirements: 2.6, 9.2_
 
-  - [ ] 2.4 Write unit tests for `GarmentSpec` protocol and `BodiceGarmentSpec` in `tests/test_garment_spec.py`
+  - [x] 2.4 Write unit tests for `GarmentSpec` protocol and `BodiceGarmentSpec` in `tests/test_garment_spec.py`
     - Test protocol conformance via `isinstance` check with `runtime_checkable`
     - Test `BodiceGarmentSpec` produces identical output to pre-refactor pipeline
     - Test orchestrator with explicit `BodiceGarmentSpec` matches pre-refactor output
@@ -63,11 +63,11 @@ Milestone 2 adds skirt block generation, pattern grading, and a garment-agnostic
     - **Property 2: BodiceGarmentSpec Orchestrator Regression**
     - **Validates: Requirements 2.3, 9.3, 9.4, 9.5**
 
-  - [ ] 2.7 Run bodice regression suite — confirm zero regressions
+  - [x] 2.7 Run bodice regression suite — confirm zero regressions
     - Ensure all tests in `test_bodice_regression.py` and all 28 existing tests pass
     - _Requirements: 9.1_
 
-  - [ ] 2.8 Checkpoint — Ensure all tests pass
+  - [x] 2.8 Checkpoint — Ensure all tests pass
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 3. PR 3 — Refactor simulation/detector/corrector to accept garment spec
