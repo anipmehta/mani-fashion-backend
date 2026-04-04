@@ -248,3 +248,4 @@ def test_garment_spec_orchestrator_regression_all_profiles(
 
     assert result_default.convergence_status == result_spec.convergence_status
     assert result_default.total_iterations == result_spec.total_iterations
+
