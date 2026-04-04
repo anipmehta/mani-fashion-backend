@@ -15,8 +15,12 @@ from __future__ import annotations
 
 import math
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from agentic_pattern_engine.models import (
     BodyModel,
@@ -47,8 +51,14 @@ class MassSpringSimulationEngine:
         self,
         sloper: BodiceSloper,
         body_model: BodyModel,
+        stress_fn: "Callable[[list, MeasurementProfile], dict[str, float]] | None" = None,
     ) -> SimulationResult:
         """Run analytical stress estimation on the sloper draped over body_model.
+
+        When *stress_fn* is provided, it is called instead of the
+        built-in ``_compute_regional_stresses`` to compute per-region
+        stress values.  This allows garment-agnostic specs to inject
+        their own stress model.
 
         Returns a SimulationResult with per-vertex stress values and
         collision data. The simulation is deterministic.
@@ -66,10 +76,19 @@ class MassSpringSimulationEngine:
 
         elapsed = (time.perf_counter() - start) * 1000.0
 
+        # Use injected stress function when provided, else bodice default
+        if stress_fn is not None:
+            pieces = [sloper.front_bodice, sloper.back_bodice]
+            regional = stress_fn(pieces, body_model.profile)
+        else:
+            regional = self._compute_regional_stresses(
+                sloper, body_model.profile,
+            )
+
         tension_map = TensionMap(
             vertex_stresses=stresses,
             collision_vertices=collisions,
-            regional_stresses=self._compute_regional_stresses(sloper, body_model.profile),
+            regional_stresses=regional,
         )
         return SimulationResult(
             tension_map=tension_map,

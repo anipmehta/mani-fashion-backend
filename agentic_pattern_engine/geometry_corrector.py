@@ -8,6 +8,10 @@ then pulling, then insufficient_tension.
 from __future__ import annotations
 
 import dataclasses
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from agentic_pattern_engine.models import (
     BodiceSloper,
@@ -41,9 +45,43 @@ _EASE_REGIONS = {FitRegion.BUST, FitRegion.WAIST, FitRegion.SIDE_SEAM, FitRegion
 
 
 class DartEaseGeometryCorrector:
-    """Plan and validate geometry corrections for detected fit issues."""
+    """Plan and validate geometry corrections for detected fit issues.
+
+    When *plan_corrections_fn* and *apply_corrections_fn* callables
+    are provided, they are used instead of the built-in bodice logic.
+    This allows garment-agnostic specs to inject their own correction
+    strategies (e.g. skirt dart/flare adjustments).
+    """
+
+    def __init__(
+        self,
+        plan_corrections_fn: "Callable | None" = None,
+        apply_corrections_fn: "Callable | None" = None,
+    ) -> None:
+        self._plan_fn = plan_corrections_fn
+        self._apply_fn = apply_corrections_fn
 
     def plan_corrections(
+        self,
+        fit_issues: list[FitIssue],
+        current_sloper: BodiceSloper,
+        profile: MeasurementProfile,
+        dampening_factor: float = 1.0,
+    ) -> list[CorrectionStrategy]:
+        """Plan corrections for detected fit issues.
+
+        When a custom plan_corrections_fn was provided at construction,
+        delegates to it.  Otherwise uses the built-in bodice logic.
+        """
+        if self._plan_fn is not None:
+            return self._plan_fn(
+                fit_issues, current_sloper, profile, dampening_factor,
+            )
+        return self._default_plan_corrections(
+            fit_issues, current_sloper, profile, dampening_factor,
+        )
+
+    def _default_plan_corrections(
         self,
         fit_issues: list[FitIssue],
         current_sloper: BodiceSloper,
@@ -161,6 +199,20 @@ class DartEaseGeometryCorrector:
         return 0.0
 
     def apply_to_sloper(
+        self,
+        sloper: BodiceSloper,
+        corrections: list[CorrectionStrategy],
+    ) -> BodiceSloper:
+        """Apply corrections to a sloper and return updated copy.
+
+        When a custom apply_corrections_fn was provided at construction,
+        delegates to it.  Otherwise uses the built-in bodice logic.
+        """
+        if self._apply_fn is not None:
+            return self._apply_fn(sloper, corrections)
+        return self._default_apply_to_sloper(sloper, corrections)
+
+    def _default_apply_to_sloper(
         self,
         sloper: BodiceSloper,
         corrections: list[CorrectionStrategy],
