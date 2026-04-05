@@ -53,6 +53,19 @@ class DartEaseGeometryCorrector:
     strategies (e.g. skirt dart/flare adjustments).
     """
 
+    # Correction magnitude scaling factors
+    EXCESS_TENSION_SCALE = 0.05       # degrees per Pa violation
+    EXCESS_TENSION_FLOOR = 0.5        # minimum degrees
+    EXCESS_TENSION_CAP = 15.0         # maximum degrees
+    INSUFFICIENT_TENSION_SCALE = 0.01 # cm per Pa violation
+    INSUFFICIENT_TENSION_CAP = 5.0    # maximum cm
+    PULLING_SCALE = 0.015             # cm per Pa violation
+    PULLING_CAP = 3.0                 # maximum cm
+    EASE_REDISTRIBUTION_SCALE = 0.008 # cm per Pa violation
+    EASE_REDISTRIBUTION_CAP = 2.0     # maximum cm
+    DART_PLACEMENT_SHIFT = 0.1        # x-offset factor
+    MIN_DART_LENGTH = 0.5             # cm
+
     def __init__(
         self,
         plan_corrections_fn: "Callable | None" = None,
@@ -116,7 +129,11 @@ class DartEaseGeometryCorrector:
 
             # For ease-related regions, also add ease redistribution
             if issue.region in _EASE_REGIONS and issue.issue_type == FitIssueType.EXCESS_TENSION:
-                ease_mag = min(issue.violation_magnitude * 0.008, 2.0)  # cm
+                ease_mag = min(
+                    issue.violation_magnitude
+                    * DartEaseGeometryCorrector.EASE_REDISTRIBUTION_SCALE,
+                    DartEaseGeometryCorrector.EASE_REDISTRIBUTION_CAP,
+                )
                 corrections.append(CorrectionStrategy(
                     target_region=issue.region,
                     issue_type=issue.issue_type,
@@ -181,20 +198,25 @@ class DartEaseGeometryCorrector:
         violation = issue.violation_magnitude
 
         if issue.issue_type == FitIssueType.EXCESS_TENSION:
-            # Increase dart angle proportional to violation.
-            # Scale: 100 Pa violation -> ~5 degrees adjustment.
-            # Floor of 0.5° prevents infinitesimal corrections near
-            # the threshold (e.g. 1 Pa violation → 0.05° is too small
-            # to ever converge).
-            return min(max(violation * 0.05, 0.5), 15.0)
+            return min(
+                max(
+                    violation * DartEaseGeometryCorrector.EXCESS_TENSION_SCALE,
+                    DartEaseGeometryCorrector.EXCESS_TENSION_FLOOR,
+                ),
+                DartEaseGeometryCorrector.EXCESS_TENSION_CAP,
+            )
 
         if issue.issue_type == FitIssueType.INSUFFICIENT_TENSION:
-            # Decrease dart length proportional to violation
-            return min(violation * 0.01, 5.0)
+            return min(
+                violation * DartEaseGeometryCorrector.INSUFFICIENT_TENSION_SCALE,
+                DartEaseGeometryCorrector.INSUFFICIENT_TENSION_CAP,
+            )
 
         if issue.issue_type == FitIssueType.PULLING:
-            # Adjust dart placement proportional to violation
-            return min(violation * 0.015, 3.0)
+            return min(
+                violation * DartEaseGeometryCorrector.PULLING_SCALE,
+                DartEaseGeometryCorrector.PULLING_CAP,
+            )
 
         return 0.0
 
@@ -272,7 +294,10 @@ class DartEaseGeometryCorrector:
                     darts[idx] = DartGeometry(
                         apex=d.apex,
                         angle=d.angle,
-                        length=max(0.5, d.length - c.magnitude),
+                        length=max(
+                            DartEaseGeometryCorrector.MIN_DART_LENGTH,
+                            d.length - c.magnitude,
+                        ),
                     )
 
             elif c.correction_type == CorrectionType.ADJUST_DART_PLACEMENT:
@@ -280,7 +305,12 @@ class DartEaseGeometryCorrector:
                 if darts and idx < len(darts):
                     d = darts[idx]
                     darts[idx] = DartGeometry(
-                        apex=Point2D(d.apex.x + c.magnitude * 0.1, d.apex.y),
+                        apex=Point2D(
+                            d.apex.x
+                            + c.magnitude
+                            * DartEaseGeometryCorrector.DART_PLACEMENT_SHIFT,
+                            d.apex.y,
+                        ),
                         angle=d.angle,
                         length=d.length,
                     )

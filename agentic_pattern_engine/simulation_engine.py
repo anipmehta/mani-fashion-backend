@@ -44,6 +44,12 @@ class MassSpringSimulationEngine:
     dimensions and body dimensions.
     """
 
+    # Region names in priority order (highest first)
+    BODICE_REGION_NAMES = [
+        "bust", "waist", "shoulder", "armhole",
+        "side_seam", "center_front", "center_back",
+    ]
+
     def __init__(self, fabric_stiffness: float = DEFAULT_FABRIC_STIFFNESS) -> None:
         self.fabric_stiffness = fabric_stiffness
 
@@ -342,13 +348,13 @@ class MassSpringSimulationEngine:
         ) * 0.2) * cb_dart_factor
 
         return {
-            "bust": bust_stress,
-            "waist": waist_stress,
-            "shoulder": shoulder_stress,
-            "armhole": armhole_stress,
-            "side_seam": side_seam_stress,
-            "center_front": center_front_stress,
-            "center_back": center_back_stress,
+            self.BODICE_REGION_NAMES[0]: bust_stress,
+            self.BODICE_REGION_NAMES[1]: waist_stress,
+            self.BODICE_REGION_NAMES[2]: shoulder_stress,
+            self.BODICE_REGION_NAMES[3]: armhole_stress,
+            self.BODICE_REGION_NAMES[4]: side_seam_stress,
+            self.BODICE_REGION_NAMES[5]: center_front_stress,
+            self.BODICE_REGION_NAMES[6]: center_back_stress,
         }
 
     @staticmethod
@@ -363,10 +369,7 @@ class MassSpringSimulationEngine:
         """
         region_map: dict[int, str] = {}
         # Process in reverse priority so higher-priority overwrites
-        for region_name in reversed([
-            "bust", "waist", "shoulder", "armhole",
-            "side_seam", "center_front", "center_back",
-        ]):
+        for region_name in reversed(MassSpringSimulationEngine.BODICE_REGION_NAMES):
             indices = getattr(fit_regions, region_name)
             for idx in indices:
                 region_map[int(idx)] = region_name

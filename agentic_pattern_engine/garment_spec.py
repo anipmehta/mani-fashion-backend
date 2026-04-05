@@ -108,6 +108,25 @@ class BodiceGarmentSpec:
     correction logic.  Does NOT modify any frozen files.
     """
 
+    GARMENT_TYPE = "bodice"
+    MEASUREMENT_FIELDS = [
+        "chest", "waist", "hip",
+        "shoulder_width", "torso_length",
+    ]
+    FIT_REGIONS = [
+        "bust", "waist", "shoulder", "armhole",
+        "side_seam", "center_front", "center_back",
+    ]
+    DEFAULT_TENSION_THRESHOLDS: dict[str, float] = {
+        "bust": 60.0,
+        "waist": 50.0,
+        "shoulder": 80.0,
+        "armhole": 70.0,
+        "side_seam": 55.0,
+        "center_front": 50.0,
+        "center_back": 50.0,
+    }
+
     def __init__(self) -> None:
         from agentic_pattern_engine.geometry_corrector import (
             DartEaseGeometryCorrector,
@@ -128,33 +147,19 @@ class BodiceGarmentSpec:
 
     @property
     def garment_type(self) -> str:
-        return "bodice"
+        return self.GARMENT_TYPE
 
     @property
     def measurement_fields(self) -> list[str]:
-        return [
-            "chest", "waist", "hip",
-            "shoulder_width", "torso_length",
-        ]
+        return list(self.MEASUREMENT_FIELDS)
 
     @property
     def fit_regions(self) -> list[str]:
-        return [
-            "bust", "waist", "shoulder", "armhole",
-            "side_seam", "center_front", "center_back",
-        ]
+        return list(self.FIT_REGIONS)
 
     @property
     def tension_thresholds(self) -> dict[str, float]:
-        return {
-            "bust": 60.0,
-            "waist": 50.0,
-            "shoulder": 80.0,
-            "armhole": 70.0,
-            "side_seam": 55.0,
-            "center_front": 50.0,
-            "center_back": 50.0,
-        }
+        return dict(self.DEFAULT_TENSION_THRESHOLDS)
 
     # -- protocol methods --------------------------------------------------
 

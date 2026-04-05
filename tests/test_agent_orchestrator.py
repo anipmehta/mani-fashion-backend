@@ -314,12 +314,14 @@ def test_agent_orchestrator_build_compat_sloper_non_bodice_wrapper() -> None:
 
     result = orch._build_compat_sloper([front, back], profile)
     assert isinstance(result, BodiceSloper)
-    assert result.sloper_id == "compat"
+    assert result.sloper_id == AgentOrchestrator.COMPAT_SLOPER_ID
     assert result.front_bodice is front
     assert result.back_bodice is back
     assert result.bust_ease == 0.0
     assert result.waist_ease == 0.0
-    assert result.metadata["garment_type"] == "skirt"
+    assert result.metadata[
+        AgentOrchestrator.METADATA_GARMENT_TYPE_KEY
+    ] == "skirt"
 
 
 def test_agent_orchestrator_build_compat_sloper_non_bodice_empty() -> None:

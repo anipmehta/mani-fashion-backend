@@ -167,3 +167,40 @@ def test_geometry_corrector_no_callables_uses_default() -> None:
     updated = corrector.apply_to_sloper(sloper, corrections)
     assert updated.front_bodice is not None
     assert updated.back_bodice is not None
+
+
+def test_geometry_corrector_magnitude_uses_class_constants() -> None:
+    """_compute_magnitude uses class-level scaling constants."""
+    from agentic_pattern_engine.geometry_corrector import (
+        DartEaseGeometryCorrector,
+    )
+
+    profile = SAMPLE_PROFILES["medium"]
+    sloper = _generator.generate(profile)
+
+    # Excess tension: violation * SCALE, floored, capped
+    issue = FitIssue(
+        FitRegion.BUST, FitIssueType.EXCESS_TENSION,
+        160.0, 60.0, 100.0,
+    )
+    mag = DartEaseGeometryCorrector._compute_magnitude(issue, sloper)
+    expected = min(
+        max(
+            100.0 * DartEaseGeometryCorrector.EXCESS_TENSION_SCALE,
+            DartEaseGeometryCorrector.EXCESS_TENSION_FLOOR,
+        ),
+        DartEaseGeometryCorrector.EXCESS_TENSION_CAP,
+    )
+    assert mag == expected
+
+    # Insufficient tension
+    issue2 = FitIssue(
+        FitRegion.BUST, FitIssueType.INSUFFICIENT_TENSION,
+        5.0, 60.0, 55.0,
+    )
+    mag2 = DartEaseGeometryCorrector._compute_magnitude(issue2, sloper)
+    expected2 = min(
+        55.0 * DartEaseGeometryCorrector.INSUFFICIENT_TENSION_SCALE,
+        DartEaseGeometryCorrector.INSUFFICIENT_TENSION_CAP,
+    )
+    assert mag2 == expected2

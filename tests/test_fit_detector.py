@@ -111,33 +111,44 @@ def test_custom_threshold_usage(data, thresholds: TensionThresholds):
 
 from tests.conftest import SAMPLE_PROFILES
 
+from agentic_pattern_engine.garment_spec import BodiceGarmentSpec
+
+# Test constants
+_BUST = FitRegion.BUST.value
+_WAIST = FitRegion.WAIST.value
+_SHOULDER = FitRegion.SHOULDER.value
+_ARMHOLE = FitRegion.ARMHOLE.value
+_HIGH_STRESS = 999.0
+_BUST_THRESHOLD = BodiceGarmentSpec.DEFAULT_TENSION_THRESHOLDS[_BUST]
+_WAIST_THRESHOLD = BodiceGarmentSpec.DEFAULT_TENSION_THRESHOLDS[_WAIST]
+
 
 def test_fit_detector_spec_regions_filters_to_subset() -> None:
     """When spec_regions is provided, only those regions are evaluated."""
     profile = SAMPLE_PROFILES["medium"]
     body = _builder.build(profile)
 
-    # Create a tension map with high stress everywhere
-    regional = {r.value: 999.0 for r in FitRegion}
+    regional = {r.value: _HIGH_STRESS for r in FitRegion}
     tm = TensionMap(
         vertex_stresses=np.zeros(len(body.vertices)),
         collision_vertices=np.array([], dtype=np.int32),
         regional_stresses=regional,
     )
 
-    # Only check bust and waist
     issues = _detector.detect(
         tm, body,
-        spec_regions=["bust", "waist"],
-        spec_thresholds={"bust": 60.0, "waist": 50.0},
+        spec_regions=[_BUST, _WAIST],
+        spec_thresholds={
+            _BUST: _BUST_THRESHOLD,
+            _WAIST: _WAIST_THRESHOLD,
+        },
     )
 
     region_names = {i.region.value for i in issues}
-    assert "bust" in region_names
-    assert "waist" in region_names
-    # Should NOT include shoulder, armhole, etc.
-    assert "shoulder" not in region_names
-    assert "armhole" not in region_names
+    assert _BUST in region_names
+    assert _WAIST in region_names
+    assert _SHOULDER not in region_names
+    assert _ARMHOLE not in region_names
 
 
 def test_fit_detector_spec_thresholds_used() -> None:
@@ -146,7 +157,9 @@ def test_fit_detector_spec_thresholds_used() -> None:
     profile = SAMPLE_PROFILES["medium"]
     body = _builder.build(profile)
 
-    regional = {"bust": 70.0, "waist": 30.0}
+    bust_stress_above = _BUST_THRESHOLD + 10.0
+    waist_stress_below = _WAIST_THRESHOLD - 20.0
+    regional = {_BUST: bust_stress_above, _WAIST: waist_stress_below}
     tm = TensionMap(
         vertex_stresses=np.zeros(len(body.vertices)),
         collision_vertices=np.array([], dtype=np.int32),
@@ -155,17 +168,18 @@ def test_fit_detector_spec_thresholds_used() -> None:
 
     issues = _detector.detect(
         tm, body,
-        spec_regions=["bust", "waist"],
-        spec_thresholds={"bust": 60.0, "waist": 50.0},
+        spec_regions=[_BUST, _WAIST],
+        spec_thresholds={
+            _BUST: _BUST_THRESHOLD,
+            _WAIST: _WAIST_THRESHOLD,
+        },
     )
 
-    # bust=70 > threshold=60 → excess
-    bust_issues = [i for i in issues if i.region.value == "bust"]
+    bust_issues = [i for i in issues if i.region == FitRegion.BUST]
     assert len(bust_issues) == 1
-    assert bust_issues[0].threshold == 60.0
+    assert bust_issues[0].threshold == _BUST_THRESHOLD
 
-    # waist=30 < threshold=50 → no issue
-    waist_issues = [i for i in issues if i.region.value == "waist"]
+    waist_issues = [i for i in issues if i.region == FitRegion.WAIST]
     assert len(waist_issues) == 0
 
 
@@ -174,7 +188,7 @@ def test_fit_detector_no_spec_regions_uses_legacy() -> None:
     profile = SAMPLE_PROFILES["medium"]
     body = _builder.build(profile)
 
-    regional = {r.value: 999.0 for r in FitRegion}
+    regional = {r.value: _HIGH_STRESS for r in FitRegion}
     tm = TensionMap(
         vertex_stresses=np.zeros(len(body.vertices)),
         collision_vertices=np.array([], dtype=np.int32),
@@ -182,6 +196,40 @@ def test_fit_detector_no_spec_regions_uses_legacy() -> None:
     )
 
     issues = _detector.detect(tm, body)
-    # Legacy path checks all 7 FitRegion members
     region_names = {i.region.value for i in issues}
     assert len(region_names) == len(FitRegion)
+
+
+def test_fit_detector_spec_regions_unknown_region_skipped() -> None:
+    """Unknown region names (not in FitRegion enum) are skipped
+    without error."""
+    profile = SAMPLE_PROFILES["medium"]
+    body = _builder.build(profile)
+
+    unknown_hip = "hip"
+    unknown_hem = "hem"
+    regional = {
+        unknown_hip: _HIGH_STRESS,
+        unknown_hem: _HIGH_STRESS,
+        _BUST: _HIGH_STRESS,
+    }
+    tm = TensionMap(
+        vertex_stresses=np.zeros(len(body.vertices)),
+        collision_vertices=np.array([], dtype=np.int32),
+        regional_stresses=regional,
+    )
+
+    issues = _detector.detect(
+        tm, body,
+        spec_regions=[unknown_hip, unknown_hem, _BUST],
+        spec_thresholds={
+            unknown_hip: 50.0,
+            unknown_hem: 30.0,
+            _BUST: _BUST_THRESHOLD,
+        },
+    )
+
+    region_names = {i.region.value for i in issues}
+    assert _BUST in region_names
+    assert unknown_hip not in region_names
+    assert unknown_hem not in region_names

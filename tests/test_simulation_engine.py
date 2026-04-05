@@ -77,6 +77,8 @@ def test_simulation_determinism(profile):
 
 from tests.conftest import SAMPLE_PROFILES
 
+from agentic_pattern_engine.garment_spec import BodiceGarmentSpec
+
 
 def test_simulation_engine_stress_fn_callable_used() -> None:
     """When stress_fn is provided, simulate uses it instead of
@@ -89,7 +91,10 @@ def test_simulation_engine_stress_fn_callable_used() -> None:
     sloper = gen.generate(profile)
     body_model = builder.build(profile)
 
-    custom_stresses = {"bust": 99.0, "waist": 88.0}
+    custom_stresses = {
+        BodiceGarmentSpec.FIT_REGIONS[0]: 99.0,
+        BodiceGarmentSpec.FIT_REGIONS[1]: 88.0,
+    }
 
     def fake_stress_fn(pieces, prof):
         return custom_stresses
@@ -112,8 +117,8 @@ def test_simulation_engine_stress_fn_none_uses_default() -> None:
     result = sim.simulate(sloper, body_model, stress_fn=None)
     regional = result.tension_map.regional_stresses
     assert regional is not None
-    assert "bust" in regional
-    assert "waist" in regional
+    for region_name in BodiceGarmentSpec.FIT_REGIONS:
+        assert region_name in regional
 
 
 def test_simulation_engine_stress_fn_receives_pieces() -> None:
@@ -131,9 +136,26 @@ def test_simulation_engine_stress_fn_receives_pieces() -> None:
     def spy_stress_fn(pieces, prof):
         captured["pieces"] = pieces
         captured["profile"] = prof
-        return {"bust": 0.0}
+        return {BodiceGarmentSpec.FIT_REGIONS[0]: 0.0}
 
     sim.simulate(sloper, body_model, stress_fn=spy_stress_fn)
     assert len(captured["pieces"]) == 2
-    assert captured["pieces"][0].piece_id == "front_bodice"
+    assert captured["pieces"][0].piece_id == sloper.front_bodice.piece_id
     assert captured["profile"] is profile
+
+
+def test_simulation_engine_regional_stresses_use_region_constants() -> None:
+    """Default regional stresses keys match BODICE_REGION_NAMES."""
+    profile = SAMPLE_PROFILES["medium"]
+    gen = ParsonsSloperGenerator()
+    builder = ParametricBodyModelBuilder()
+    sim = MassSpringSimulationEngine()
+
+    sloper = gen.generate(profile)
+    body_model = builder.build(profile)
+    result = sim.simulate(sloper, body_model)
+
+    regional = result.tension_map.regional_stresses
+    assert set(regional.keys()) == set(
+        MassSpringSimulationEngine.BODICE_REGION_NAMES
+    )
