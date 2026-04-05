@@ -36,7 +36,7 @@ def test_garment_spec_bodice_is_runtime_checkable() -> None:
 
 def test_garment_spec_bodice_garment_type() -> None:
     spec = BodiceGarmentSpec()
-    assert spec.garment_type == "bodice"
+    assert spec.garment_type == BodiceGarmentSpec.GARMENT_TYPE
 
 
 def test_garment_spec_bodice_measurement_fields() -> None:
@@ -44,8 +44,8 @@ def test_garment_spec_bodice_measurement_fields() -> None:
     fields = spec.measurement_fields
     assert isinstance(fields, list)
     assert len(fields) > 0
-    assert "chest" in fields
-    assert "waist" in fields
+    for f in BodiceGarmentSpec.MEASUREMENT_FIELDS:
+        assert f in fields
 
 
 def test_garment_spec_bodice_fit_regions_nonempty() -> None:
@@ -53,8 +53,8 @@ def test_garment_spec_bodice_fit_regions_nonempty() -> None:
     regions = spec.fit_regions
     assert isinstance(regions, list)
     assert len(regions) > 0
-    assert "bust" in regions
-    assert "waist" in regions
+    for r in BodiceGarmentSpec.FIT_REGIONS:
+        assert r in regions
 
 
 def test_garment_spec_bodice_tension_thresholds_positive() -> None:
@@ -217,7 +217,7 @@ def test_garment_spec_orchestrator_with_explicit_spec_matches() -> None:
 
     assert result_default.convergence_status == result_spec.convergence_status
     assert result_default.total_iterations == result_spec.total_iterations
-    assert result_spec.garment_type == "bodice"
+    assert result_spec.garment_type == BodiceGarmentSpec.GARMENT_TYPE
     assert result_spec.final_pieces is not None
     assert len(result_spec.final_pieces) == 2
 
@@ -228,7 +228,7 @@ def test_garment_spec_orchestrator_result_has_garment_fields() -> None:
     cfg = AgentConfig(iteration_limit=5)
     orch = AgentOrchestrator()
     result = orch.run(profile, cfg)
-    assert result.garment_type == "bodice"
+    assert result.garment_type == BodiceGarmentSpec.GARMENT_TYPE
     assert result.final_pieces is not None
 
 

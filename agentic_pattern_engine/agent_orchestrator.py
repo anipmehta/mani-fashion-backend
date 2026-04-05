@@ -41,6 +41,9 @@ from agentic_pattern_engine.sloper_generator import ParsonsSloperGenerator
 class AgentOrchestrator:
     """Execute the full agentic self-correction loop."""
 
+    COMPAT_SLOPER_ID = "compat"
+    METADATA_GARMENT_TYPE_KEY = "garment_type"
+
     def __init__(
         self,
         garment_spec: "GarmentSpec | None" = None,
@@ -272,13 +275,15 @@ class AgentOrchestrator:
         if front is None:
             return self._sloper_gen.generate(profile)
         return BodiceSloper(
-            sloper_id="compat",
+            sloper_id=self.COMPAT_SLOPER_ID,
             profile=profile,
             front_bodice=front,
             back_bodice=back,
             bust_ease=0.0,
             waist_ease=0.0,
-            metadata={"garment_type": self._spec.garment_type},
+            metadata={
+                self.METADATA_GARMENT_TYPE_KEY: self._spec.garment_type,
+            },
         )
 
     @staticmethod
