@@ -346,21 +346,24 @@ class SkirtGarmentSpec:
         pieces: list[PatternPiece],
         profile: "MeasurementProfile",
     ) -> dict[str, float]:
-        """Skirt-specific stress model.
+        """Skirt-specific stress model with 3D shaping stress.
 
-        Computes tension for 4 regions:
-        - hip: body hip circ vs garment hip circ + ease
-        - waist: body waist circ vs garment waist circ + dart relief
-        - hem: flare distribution relative to hip-to-hem length
-        - side_seam: combined ease/dart relief vs hip-waist diff
+        Like the bodice, a flat skirt pattern wrapping around a 3D
+        body creates inherent tension from the waist-hip differential.
+        Darts are the primary mechanism to relieve this shaping stress.
         """
         sp = self._to_skirt_profile(profile)
         front = pieces[0]
         back = pieces[1]
 
-        # Garment dimensions from pattern pieces
-        front_width = max(p.x for p in front.outline) - min(p.x for p in front.outline)
-        back_width = max(p.x for p in back.outline) - min(p.x for p in back.outline)
+        front_width = (
+            max(p.x for p in front.outline)
+            - min(p.x for p in front.outline)
+        )
+        back_width = (
+            max(p.x for p in back.outline)
+            - min(p.x for p in back.outline)
+        )
 
         garment_hip_circ = (front_width + back_width) * 2.0
 
@@ -373,15 +376,43 @@ class SkirtGarmentSpec:
 
         garment_waist_circ = garment_hip_circ - total_dart_relief * 2.0
 
-        # Hip stress
+        # --- Circumference stress ---
         hip_stretch = sp.hip / max(garment_hip_circ, 1e-6)
-        hip_stress = self.FABRIC_STIFFNESS * max(0.0, hip_stretch - 1.0)
+        hip_stress_circ = self.FABRIC_STIFFNESS * max(
+            0.0, hip_stretch - 1.0,
+        )
 
-        # Waist stress
         waist_stretch = sp.waist / max(garment_waist_circ, 1e-6)
-        waist_stress = self.FABRIC_STIFFNESS * max(0.0, waist_stretch - 1.0)
+        waist_stress_circ = self.FABRIC_STIFFNESS * max(
+            0.0, waist_stretch - 1.0,
+        )
 
-        # Hem stress — based on flare adequacy
+        # --- 3D shaping stress ---
+        # The hip-waist differential creates inherent tension
+        # even when the garment is larger than the body, because
+        # the flat pattern must curve around the hip prominence.
+        hip_waist_diff = abs(sp.hip - sp.waist)
+        shaping_ratio = hip_waist_diff / max(sp.hip, 1.0)
+
+        # Hip shaping: fabric must curve around the widest point
+        hip_dart_frac = total_dart_relief / max(
+            hip_waist_diff * 1.2, 1.0,
+        )
+        hip_shaping = (
+            self.FABRIC_STIFFNESS * shaping_ratio * 0.7
+            * max(0.0, 1.0 - hip_dart_frac)
+        )
+
+        # Waist shaping: must take in fullness from hip width
+        waist_dart_frac = total_dart_relief / max(
+            hip_waist_diff * 1.5, 1.0,
+        )
+        waist_shaping = (
+            self.FABRIC_STIFFNESS * shaping_ratio * 0.8
+            * max(0.0, 1.0 - waist_dart_frac)
+        )
+
+        # --- Hem stress ---
         hip_to_hem = sp.desired_length - sp.hip_depth
         hem_width = (front_width + back_width) * 2.0
         flare_ratio = hem_width / max(garment_hip_circ, 1e-6)
@@ -389,16 +420,17 @@ class SkirtGarmentSpec:
             0.0, 1.0 - flare_ratio,
         ) * 0.3
 
-        # Side seam stress
-        hip_waist_diff = abs(sp.hip - sp.waist)
+        # --- Side seam stress ---
         ease_relief = total_dart_relief / max(hip_waist_diff, 1e-6)
-        side_stress = self.FABRIC_STIFFNESS * max(
-            0.0, 0.5 - ease_relief,
-        ) * 0.4
+        side_stress = (
+            self.FABRIC_STIFFNESS
+            * max(0.0, shaping_ratio - ease_relief * 0.5)
+            * 0.4
+        )
 
         return {
-            "hip": hip_stress,
-            "waist": waist_stress,
+            "hip": hip_stress_circ + hip_shaping,
+            "waist": waist_stress_circ + waist_shaping,
             "hem": hem_stress,
             "side_seam": side_stress,
         }
@@ -487,13 +519,20 @@ class SkirtGarmentSpec:
         pieces: list[PatternPiece],
         corrections: list["CorrectionStrategy"],
     ) -> list[PatternPiece]:
-        """Apply corrections to skirt pieces."""
+        """Apply corrections to skirt pieces.
+
+        Adjusts dart geometry AND updates the outline to reflect
+        the changed garment dimensions (wider darts = narrower waist
+        = less tension).
+        """
         import dataclasses
         from agentic_pattern_engine.models import CorrectionType
 
         updated: list[PatternPiece] = []
         for piece in pieces:
             new_darts = list(piece.darts)
+            outline_pts = list(piece.outline)
+
             for corr in corrections:
                 if corr.correction_type == CorrectionType.ADJUST_DART_ANGLE:
                     for i, d in enumerate(new_darts):
@@ -502,6 +541,15 @@ class SkirtGarmentSpec:
                             angle=d.angle + corr.magnitude,
                             length=d.length,
                         )
+                    # Widen the side seam to account for increased
+                    # dart intake — this changes garment dimensions
+                    for j, pt in enumerate(outline_pts):
+                        if pt.x > 0:
+                            scale = 1.0 + corr.magnitude * 0.015
+                            outline_pts[j] = Point2D(
+                                pt.x * scale, pt.y,
+                            )
+
                 elif corr.correction_type == CorrectionType.ADJUST_DART_LENGTH:
                     for i, d in enumerate(new_darts):
                         new_darts[i] = DartGeometry(
@@ -509,8 +557,20 @@ class SkirtGarmentSpec:
                             angle=d.angle,
                             length=max(0.5, d.length - corr.magnitude),
                         )
+
+                elif corr.correction_type == CorrectionType.REDISTRIBUTE_EASE:
+                    # Increase hem flare
+                    for j, pt in enumerate(outline_pts):
+                        if pt.y > self._last_profile.hip_depth:
+                            scale = 1.0 + corr.magnitude * 0.01
+                            outline_pts[j] = Point2D(
+                                pt.x * scale, pt.y,
+                            )
+
             updated.append(dataclasses.replace(
-                piece, darts=tuple(new_darts),
+                piece,
+                darts=tuple(new_darts),
+                outline=tuple(outline_pts),
             ))
         return updated
 
