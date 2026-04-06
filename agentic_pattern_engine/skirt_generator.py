@@ -18,8 +18,11 @@ from __future__ import annotations
 import math
 
 from agentic_pattern_engine.models import (
+    CorrectionStrategy,
     DartGeometry,
+    FitIssue,
     Line2D,
+    MeasurementProfile,
     PatternPiece,
     Point2D,
     SkirtMeasurementProfile,
@@ -261,3 +264,295 @@ class SkirtGenerator:
         """Compute hem flare width for A-line silhouette."""
         hip_to_hem = profile.desired_length - profile.hip_depth
         return max(0.0, hip_to_hem * self.HEM_FLARE_SCALE)
+
+
+# ---------------------------------------------------------------------------
+# SkirtGarmentSpec — GarmentSpec implementation for skirts
+# ---------------------------------------------------------------------------
+
+
+class SkirtGarmentSpec:
+    """GarmentSpec implementation for A-line skirt blocks.
+
+    Provides skirt-specific stress model (hip, waist, hem, side_seam),
+    correction strategies (dart angle/length, hem flare), and delegates
+    generation to SkirtGenerator.
+    """
+
+    GARMENT_TYPE = "skirt"
+    MEASUREMENT_FIELDS = ["waist", "hip", "hip_depth", "desired_length"]
+    FIT_REGIONS = ["hip", "waist", "hem", "side_seam"]
+    DEFAULT_TENSION_THRESHOLDS: dict[str, float] = {
+        "hip": 50.0,
+        "waist": 45.0,
+        "hem": 30.0,
+        "side_seam": 40.0,
+    }
+
+    # Stress model constants
+    FABRIC_STIFFNESS = 1000.0     # Pa
+    DART_RELIEF_FACTOR = 0.035    # relief per degree*cm of dart
+    EASE_FACTOR = 0.5             # ease contribution weight
+
+    # Correction constants
+    WAIST_DART_ANGLE_SCALE = 0.05   # degrees per Pa violation
+    WAIST_DART_ANGLE_FLOOR = 0.5    # minimum correction degrees
+    WAIST_DART_ANGLE_CAP = 15.0     # maximum correction degrees
+    DART_LENGTH_SCALE = 0.01        # cm per Pa violation
+    DART_LENGTH_CAP = 5.0           # maximum cm
+    HEM_FLARE_SCALE = 0.02          # cm per Pa violation
+    HEM_FLARE_CAP = 3.0             # maximum cm
+
+    def __init__(self) -> None:
+        self._generator = SkirtGenerator()
+        self._last_pieces: list[PatternPiece] | None = None
+        self._last_profile: SkirtMeasurementProfile | None = None
+
+    @property
+    def garment_type(self) -> str:
+        return self.GARMENT_TYPE
+
+    @property
+    def measurement_fields(self) -> list[str]:
+        return list(self.MEASUREMENT_FIELDS)
+
+    @property
+    def fit_regions(self) -> list[str]:
+        return list(self.FIT_REGIONS)
+
+    @property
+    def tension_thresholds(self) -> dict[str, float]:
+        return dict(self.DEFAULT_TENSION_THRESHOLDS)
+
+    def validate_profile(
+        self, profile: "MeasurementProfile",
+    ) -> list[str]:
+        """Validate by constructing a SkirtMeasurementProfile."""
+        skirt_profile = self._to_skirt_profile(profile)
+        return skirt_profile.validate()
+
+    def generate_initial_pieces(
+        self, profile: "MeasurementProfile",
+    ) -> list[PatternPiece]:
+        """Generate initial skirt pieces from measurements."""
+        skirt_profile = self._to_skirt_profile(profile)
+        self._last_profile = skirt_profile
+        pieces = self._generator.generate(skirt_profile)
+        self._last_pieces = pieces
+        return pieces
+
+    def compute_stress(
+        self,
+        pieces: list[PatternPiece],
+        profile: "MeasurementProfile",
+    ) -> dict[str, float]:
+        """Skirt-specific stress model.
+
+        Computes tension for 4 regions:
+        - hip: body hip circ vs garment hip circ + ease
+        - waist: body waist circ vs garment waist circ + dart relief
+        - hem: flare distribution relative to hip-to-hem length
+        - side_seam: combined ease/dart relief vs hip-waist diff
+        """
+        sp = self._to_skirt_profile(profile)
+        front = pieces[0]
+        back = pieces[1]
+
+        # Garment dimensions from pattern pieces
+        front_width = max(p.x for p in front.outline) - min(p.x for p in front.outline)
+        back_width = max(p.x for p in back.outline) - min(p.x for p in back.outline)
+
+        garment_hip_circ = (front_width + back_width) * 2.0
+
+        # Dart relief
+        all_darts = list(front.darts) + list(back.darts)
+        total_dart_relief = sum(
+            d.angle * d.length * self.DART_RELIEF_FACTOR
+            for d in all_darts
+        )
+
+        garment_waist_circ = garment_hip_circ - total_dart_relief * 2.0
+
+        # Hip stress
+        hip_stretch = sp.hip / max(garment_hip_circ, 1e-6)
+        hip_stress = self.FABRIC_STIFFNESS * max(0.0, hip_stretch - 1.0)
+
+        # Waist stress
+        waist_stretch = sp.waist / max(garment_waist_circ, 1e-6)
+        waist_stress = self.FABRIC_STIFFNESS * max(0.0, waist_stretch - 1.0)
+
+        # Hem stress — based on flare adequacy
+        hip_to_hem = sp.desired_length - sp.hip_depth
+        hem_width = (front_width + back_width) * 2.0
+        flare_ratio = hem_width / max(garment_hip_circ, 1e-6)
+        hem_stress = self.FABRIC_STIFFNESS * max(
+            0.0, 1.0 - flare_ratio,
+        ) * 0.3
+
+        # Side seam stress
+        hip_waist_diff = abs(sp.hip - sp.waist)
+        ease_relief = total_dart_relief / max(hip_waist_diff, 1e-6)
+        side_stress = self.FABRIC_STIFFNESS * max(
+            0.0, 0.5 - ease_relief,
+        ) * 0.4
+
+        return {
+            "hip": hip_stress,
+            "waist": waist_stress,
+            "hem": hem_stress,
+            "side_seam": side_stress,
+        }
+
+    def plan_corrections(
+        self,
+        fit_issues: list["FitIssue"],
+        pieces: list[PatternPiece],
+        profile: "MeasurementProfile",
+        dampening_factor: float,
+    ) -> list["CorrectionStrategy"]:
+        """Plan skirt-specific corrections."""
+        from agentic_pattern_engine.models import (
+            CorrectionStrategy,
+            CorrectionType,
+            FitIssueType,
+        )
+
+        corrections: list[CorrectionStrategy] = []
+        for issue in fit_issues:
+            violation = issue.violation_magnitude
+
+            if issue.region.value == "waist":
+                if issue.issue_type == FitIssueType.EXCESS_TENSION:
+                    mag = min(
+                        max(
+                            violation * self.WAIST_DART_ANGLE_SCALE,
+                            self.WAIST_DART_ANGLE_FLOOR,
+                        ),
+                        self.WAIST_DART_ANGLE_CAP,
+                    )
+                    corrections.append(CorrectionStrategy(
+                        target_region=issue.region,
+                        issue_type=issue.issue_type,
+                        correction_type=CorrectionType.ADJUST_DART_ANGLE,
+                        magnitude=mag * dampening_factor,
+                        dampening_factor=dampening_factor,
+                    ))
+                else:
+                    mag = min(
+                        violation * self.DART_LENGTH_SCALE,
+                        self.DART_LENGTH_CAP,
+                    )
+                    corrections.append(CorrectionStrategy(
+                        target_region=issue.region,
+                        issue_type=issue.issue_type,
+                        correction_type=CorrectionType.ADJUST_DART_LENGTH,
+                        magnitude=mag * dampening_factor,
+                        dampening_factor=dampening_factor,
+                    ))
+
+            elif issue.region.value == "hem":
+                mag = min(
+                    violation * self.HEM_FLARE_SCALE,
+                    self.HEM_FLARE_CAP,
+                )
+                corrections.append(CorrectionStrategy(
+                    target_region=issue.region,
+                    issue_type=issue.issue_type,
+                    correction_type=CorrectionType.REDISTRIBUTE_EASE,
+                    magnitude=mag * dampening_factor,
+                    dampening_factor=dampening_factor,
+                ))
+
+            else:
+                # hip, side_seam — adjust dart angle
+                mag = min(
+                    max(
+                        violation * self.WAIST_DART_ANGLE_SCALE,
+                        self.WAIST_DART_ANGLE_FLOOR,
+                    ),
+                    self.WAIST_DART_ANGLE_CAP,
+                )
+                corrections.append(CorrectionStrategy(
+                    target_region=issue.region,
+                    issue_type=issue.issue_type,
+                    correction_type=CorrectionType.ADJUST_DART_ANGLE,
+                    magnitude=mag * dampening_factor,
+                    dampening_factor=dampening_factor,
+                ))
+
+        return corrections
+
+    def apply_corrections(
+        self,
+        pieces: list[PatternPiece],
+        corrections: list["CorrectionStrategy"],
+    ) -> list[PatternPiece]:
+        """Apply corrections to skirt pieces."""
+        import dataclasses
+        from agentic_pattern_engine.models import CorrectionType
+
+        updated: list[PatternPiece] = []
+        for piece in pieces:
+            new_darts = list(piece.darts)
+            for corr in corrections:
+                if corr.correction_type == CorrectionType.ADJUST_DART_ANGLE:
+                    for i, d in enumerate(new_darts):
+                        new_darts[i] = DartGeometry(
+                            apex=d.apex,
+                            angle=d.angle + corr.magnitude,
+                            length=d.length,
+                        )
+                elif corr.correction_type == CorrectionType.ADJUST_DART_LENGTH:
+                    for i, d in enumerate(new_darts):
+                        new_darts[i] = DartGeometry(
+                            apex=d.apex,
+                            angle=d.angle,
+                            length=max(0.5, d.length - corr.magnitude),
+                        )
+            updated.append(dataclasses.replace(
+                piece, darts=tuple(new_darts),
+            ))
+        return updated
+
+    def validate_geometry(
+        self, pieces: list[PatternPiece],
+    ) -> list[str]:
+        """Validate skirt geometry."""
+        errors: list[str] = []
+        for piece in pieces:
+            if (
+                len(piece.outline) < 2
+                or piece.outline[0] != piece.outline[-1]
+            ):
+                errors.append(
+                    f"{piece.label}: outline is not closed"
+                )
+            if len(piece.darts) < 1:
+                errors.append(
+                    f"{piece.label}: must have at least one dart"
+                )
+            if piece.seam_allowance <= 0:
+                errors.append(
+                    f"{piece.label}: seam_allowance must be > 0"
+                )
+        return errors
+
+    @staticmethod
+    def _to_skirt_profile(
+        profile: "MeasurementProfile",
+    ) -> SkirtMeasurementProfile:
+        """Convert a MeasurementProfile to SkirtMeasurementProfile.
+
+        Uses waist, hip from the profile. hip_depth and desired_length
+        are taken from the profile if it's already a
+        SkirtMeasurementProfile, otherwise uses defaults.
+        """
+        if isinstance(profile, SkirtMeasurementProfile):
+            return profile
+        # Fallback: use profile fields if available
+        return SkirtMeasurementProfile(
+            waist=getattr(profile, "waist", 73.5),
+            hip=getattr(profile, "hip", 98.0),
+            hip_depth=getattr(profile, "hip_depth", 20.0),
+            desired_length=getattr(profile, "desired_length", 70.0),
+        )

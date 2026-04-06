@@ -31,6 +31,7 @@ from agentic_pattern_engine.models import (
     FitIssueType,
     FitRegion,
     MeasurementProfile,
+    SimulationResult,
     TensionMap,
 )
 from agentic_pattern_engine.pdf_exporter import PDFPatternExporter
@@ -106,12 +107,20 @@ class AgentOrchestrator:
         # --- Phase 2: Generation ---
         try:
             pieces = self._spec.generate_initial_pieces(profile)
-            body_model = self._body_builder.build(profile)
         except Exception as e:
             return self._fail_result(
                 run_id, ConvergenceStatus.GENERATION_FAILED,
                 str(e), recorder, start_time,
             )
+
+        # Build body model — may fail for non-bodice profiles
+        # (body_model_builder expects MeasurementProfile fields).
+        # For non-bodice specs the body model is only used by the
+        # simulation engine which we override with spec stresses.
+        try:
+            body_model = self._body_builder.build(profile)
+        except Exception:
+            body_model = None
 
         # Build a BodiceSloper for backward-compat audit/export
         sloper = self._build_compat_sloper(pieces, profile)
@@ -142,13 +151,29 @@ class AgentOrchestrator:
                 regional_stresses = self._spec.compute_stress(
                     pieces, profile,
                 )
-                sim_result = self._sim_engine.simulate(
-                    sloper, body_model,
-                )
-                # Override regional stresses with spec's values
-                sim_result.tension_map.regional_stresses = (
-                    regional_stresses
-                )
+                # Only run full simulation if body model is available
+                if body_model is not None:
+                    sim_result = self._sim_engine.simulate(
+                        sloper, body_model,
+                    )
+                    sim_result.tension_map.regional_stresses = (
+                        regional_stresses
+                    )
+                else:
+                    # Non-bodice path: build a minimal TensionMap
+                    # from the spec's stress computation only
+                    import numpy as np
+                    sim_result = SimulationResult(
+                        tension_map=TensionMap(
+                            vertex_stresses=np.zeros(1),
+                            collision_vertices=np.array(
+                                [], dtype=np.int32,
+                            ),
+                            regional_stresses=regional_stresses,
+                        ),
+                        simulation_time_ms=0.0,
+                        converged=True,
+                    )
             except Exception as e:
                 return AgentRunResult(
                     run_id=run_id,
@@ -171,6 +196,8 @@ class AgentOrchestrator:
                 sim_result.tension_map,
                 body_model,
                 cfg.tension_thresholds,
+                spec_regions=self._spec.fit_regions,
+                spec_thresholds=self._spec.tension_thresholds,
             )
 
             # Compute total stress magnitude
@@ -346,7 +373,9 @@ class AgentOrchestrator:
         """Build a successful AgentRunResult with exports."""
         metadata = ExportMetadata(
             profile_hash=hashlib.md5(
-                f"{profile.chest}{profile.waist}{profile.hip}"
+                f"{getattr(profile, 'waist', '')}"
+                f"{getattr(profile, 'hip', '')}"
+                f"{getattr(profile, 'chest', '')}"
                 .encode()
             ).hexdigest()[:8],
             run_id=run_id,
