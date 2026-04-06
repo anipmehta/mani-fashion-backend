@@ -448,3 +448,29 @@ def test_agent_orchestrator_oscillation_single_entry() -> None:
                   600, 500, 100)],
     ]
     assert not AgentOrchestrator._detect_oscillation(history)
+
+
+# --- body_model=None fallback for non-bodice profiles ---
+
+
+def test_agent_orchestrator_body_model_none_fallback() -> None:
+    """When body_model_builder fails (non-bodice profile),
+    orchestrator should still run using spec stress computation."""
+    from agentic_pattern_engine.models import (
+        AgentConfig,
+        SkirtMeasurementProfile,
+    )
+    from agentic_pattern_engine.skirt_generator import SkirtGarmentSpec
+
+    profile = SkirtMeasurementProfile(
+        waist=73.5, hip=98.0, hip_depth=20.0, desired_length=70.0,
+    )
+    spec = SkirtGarmentSpec()
+    orch = AgentOrchestrator(garment_spec=spec)
+    result = orch.run(profile, AgentConfig(iteration_limit=10))
+
+    # Should not fail — body_model=None is handled gracefully
+    assert result.convergence_status is not None
+    assert result.garment_type == SkirtGarmentSpec.GARMENT_TYPE
+    assert result.total_iterations >= 0
+    assert result.final_pieces is not None
