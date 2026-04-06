@@ -53,7 +53,6 @@ class TensionFitDetector:
 
         issues: list[FitIssue] = []
         stresses = tension_map.vertex_stresses
-        fit_regions = body_model.fit_regions
 
         # Use pre-computed regional stresses when available
         regional = tension_map.regional_stresses
@@ -67,8 +66,10 @@ class TensionFitDetector:
                     mean_stress = regional[region_name]
                 else:
                     # Fallback: try body model vertex indices
+                    if body_model is None:
+                        continue
                     vertex_indices = getattr(
-                        fit_regions, region_name, None,
+                        body_model.fit_regions, region_name, None,
                     )
                     if (
                         vertex_indices is None
@@ -98,6 +99,7 @@ class TensionFitDetector:
             return issues
 
         # Legacy bodice path: iterate all FitRegion enum members
+        fit_regions = body_model.fit_regions
         for region in FitRegion:
             region_name = region.value
             threshold_val = getattr(thresholds, region_name)
