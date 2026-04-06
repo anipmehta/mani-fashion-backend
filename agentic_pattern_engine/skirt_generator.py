@@ -283,6 +283,10 @@ class SkirtGarmentSpec:
     MEASUREMENT_FIELDS = ["waist", "hip", "hip_depth", "desired_length"]
     FIT_REGIONS = ["hip", "waist", "hem", "side_seam"]
     DEFAULT_TENSION_THRESHOLDS: dict[str, float] = {
+        # Thresholds derived from bodice equivalents scaled for skirt
+        # fit regions.  Hip/waist are primary structural regions
+        # (higher tolerance); hem/side_seam are secondary (lower).
+        # Bodice bust=60, waist=50 → skirt hip=50, waist=45.
         "hip": 50.0,
         "waist": 45.0,
         "hem": 30.0,
@@ -293,6 +297,13 @@ class SkirtGarmentSpec:
     FABRIC_STIFFNESS = 1000.0     # Pa
     DART_RELIEF_FACTOR = 0.035    # relief per degree*cm of dart
     EASE_FACTOR = 0.5             # ease contribution weight
+    HIP_SHAPING_WEIGHT = 0.7     # hip shaping stress multiplier
+    WAIST_SHAPING_WEIGHT = 0.8   # waist shaping stress multiplier
+    HIP_DART_DENOMINATOR = 1.2   # dart relief scaling for hip
+    WAIST_DART_DENOMINATOR = 1.5  # dart relief scaling for waist
+    HEM_STRESS_WEIGHT = 0.3      # hem stress attenuation factor
+    SIDE_SEAM_EASE_WEIGHT = 0.5  # ease contribution to side seam
+    SIDE_SEAM_STRESS_WEIGHT = 0.4  # side seam stress attenuation
 
     # Correction constants
     WAIST_DART_ANGLE_SCALE = 0.05   # degrees per Pa violation
@@ -396,19 +407,21 @@ class SkirtGarmentSpec:
 
         # Hip shaping: fabric must curve around the widest point
         hip_dart_frac = total_dart_relief / max(
-            hip_waist_diff * 1.2, 1.0,
+            hip_waist_diff * self.HIP_DART_DENOMINATOR, 1.0,
         )
         hip_shaping = (
-            self.FABRIC_STIFFNESS * shaping_ratio * 0.7
+            self.FABRIC_STIFFNESS * shaping_ratio
+            * self.HIP_SHAPING_WEIGHT
             * max(0.0, 1.0 - hip_dart_frac)
         )
 
         # Waist shaping: must take in fullness from hip width
         waist_dart_frac = total_dart_relief / max(
-            hip_waist_diff * 1.5, 1.0,
+            hip_waist_diff * self.WAIST_DART_DENOMINATOR, 1.0,
         )
         waist_shaping = (
-            self.FABRIC_STIFFNESS * shaping_ratio * 0.8
+            self.FABRIC_STIFFNESS * shaping_ratio
+            * self.WAIST_SHAPING_WEIGHT
             * max(0.0, 1.0 - waist_dart_frac)
         )
 
@@ -418,14 +431,18 @@ class SkirtGarmentSpec:
         flare_ratio = hem_width / max(garment_hip_circ, 1e-6)
         hem_stress = self.FABRIC_STIFFNESS * max(
             0.0, 1.0 - flare_ratio,
-        ) * 0.3
+        ) * self.HEM_STRESS_WEIGHT
 
         # --- Side seam stress ---
         ease_relief = total_dart_relief / max(hip_waist_diff, 1e-6)
         side_stress = (
             self.FABRIC_STIFFNESS
-            * max(0.0, shaping_ratio - ease_relief * 0.5)
-            * 0.4
+            * max(
+                0.0,
+                shaping_ratio
+                - ease_relief * self.SIDE_SEAM_EASE_WEIGHT,
+            )
+            * self.SIDE_SEAM_STRESS_WEIGHT
         )
 
         return {
