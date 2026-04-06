@@ -294,3 +294,66 @@ class ExportMetadata:
     run_id: str
     iteration_count: int
     convergence_status: str
+
+
+# ---------------------------------------------------------------------------
+# Skirt models
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SkirtMeasurementProfile:
+    """Skirt-specific body measurements."""
+
+    waist: float           # cm
+    hip: float             # cm
+    hip_depth: float       # cm — distance from waist to hip level
+    desired_length: float  # cm — waist to hem
+
+    # Validation ranges (anatomically plausible, cm)
+    RANGES: dict = field(
+        default=None,   # type: ignore[assignment]
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "RANGES", {
+            "waist": (50.0, 170.0),
+            "hip": (60.0, 180.0),
+            "hip_depth": (15.0, 30.0),
+            "desired_length": (40.0, 130.0),
+        })
+
+    def validate(self) -> list[str]:
+        """Return error strings for out-of-range fields."""
+        errors: list[str] = []
+        for fld, (lo, hi) in self.RANGES.items():
+            val = getattr(self, fld)
+            if val is None:
+                errors.append(f"{fld} is missing")
+            elif not isinstance(val, (int, float)):
+                errors.append(
+                    f"{fld} must be numeric, got {type(val).__name__}"
+                )
+            elif np.isnan(val) or np.isinf(val):
+                errors.append(f"{fld}={val} is not a finite number")
+            elif val < lo or val > hi:
+                errors.append(
+                    f"{fld}={val} is out of range [{lo}, {hi}]"
+                )
+        return errors
+
+
+@dataclass(frozen=True)
+class SkirtBlock:
+    """Skirt block output analogous to BodiceSloper."""
+
+    block_id: str
+    profile: SkirtMeasurementProfile
+    front_skirt: PatternPiece
+    back_skirt: PatternPiece
+    waist_ease: float   # cm
+    hip_ease: float     # cm
+    metadata: dict
