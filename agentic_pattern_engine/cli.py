@@ -37,17 +37,40 @@ from agentic_pattern_engine.models import (
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="agentic-pattern-engine",
-        description="MANI Agentic Pattern Engine — bodice sloper generation with self-correction",
+        description=(
+            "MANI Agentic Pattern Engine — garment pattern "
+            "generation with self-correction"
+        ),
     )
+
+    # Garment type
+    p.add_argument(
+        "--garment", type=str, default="bodice",
+        choices=["bodice", "skirt"],
+        help="Garment type: bodice (default) or skirt",
+    )
+
     # Measurement inputs (direct or JSON file)
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--profile", type=str, help="Path to JSON measurement file")
-    g.add_argument("--chest", type=float, help="Chest circumference (cm)")
+    g.add_argument(
+        "--chest", type=float,
+        help="Chest circumference (cm) — bodice primary measurement",
+    )
+    g.add_argument(
+        "--waist-primary", type=float, dest="waist_primary",
+        help="Waist circumference (cm) — skirt primary measurement "
+             "(use with --garment skirt)",
+    )
 
     p.add_argument("--waist", type=float, help="Waist circumference (cm)")
     p.add_argument("--hip", type=float, help="Hip circumference (cm)")
     p.add_argument("--shoulder-width", type=float, help="Shoulder width (cm)")
     p.add_argument("--torso-length", type=float, help="Torso length (cm)")
+
+    # Skirt-specific measurements
+    p.add_argument("--hip-depth", type=float, help="Hip depth (cm) — skirt only")
+    p.add_argument("--desired-length", type=float, help="Desired length (cm) — skirt only")
 
     # Config overrides
     p.add_argument("--iteration-limit", type=int, default=20)
@@ -68,23 +91,60 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _load_profile(args: argparse.Namespace) -> MeasurementProfile:
+def _load_profile(args: argparse.Namespace):
+    """Load measurement profile based on garment type.
+
+    Returns MeasurementProfile for bodice, SkirtMeasurementProfile
+    for skirt.  When --profile is used, auto-detects garment type
+    from the JSON 'garment_type' field if present.
+    """
+    from agentic_pattern_engine.models import SkirtMeasurementProfile
+
     if args.profile:
         data = json.loads(pathlib.Path(args.profile).read_text())
+        garment = data.get("garment_type", args.garment)
+
+        if garment == "skirt":
+            return SkirtMeasurementProfile(
+                waist=data["waist"],
+                hip=data["hip"],
+                hip_depth=data["hip_depth"],
+                desired_length=data["desired_length"],
+            ), "skirt"
+
         return MeasurementProfile(
             chest=data["chest"],
             waist=data["waist"],
             hip=data["hip"],
             shoulder_width=data["shoulder_width"],
             torso_length=data["torso_length"],
-        )
+        ), "bodice"
+
+    if args.garment == "skirt":
+        waist = args.waist_primary or args.waist
+        if not waist or not args.hip:
+            print("Error: --waist-primary and --hip are required for skirt")
+            sys.exit(1)
+        if not args.hip_depth or not args.desired_length:
+            print(
+                "Error: --hip-depth and --desired-length "
+                "are required for skirt"
+            )
+            sys.exit(1)
+        return SkirtMeasurementProfile(
+            waist=waist,
+            hip=args.hip,
+            hip_depth=args.hip_depth,
+            desired_length=args.desired_length,
+        ), "skirt"
+
     return MeasurementProfile(
         chest=args.chest,
         waist=args.waist,
         hip=args.hip,
         shoulder_width=args.shoulder_width,
         torso_length=args.torso_length,
-    )
+    ), "bodice"
 
 
 def _print_audit_trail(result) -> None:
@@ -136,9 +196,9 @@ def _print_audit_trail(result) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    profile = _load_profile(args)
+    profile, garment_type = _load_profile(args)
 
-    # Build thresholds — tight mode uses very low values to force corrections
+    # Build thresholds — tight mode uses very low values
     if args.tight_thresholds:
         thresholds = TensionThresholds(
             bust=30.0, waist=25.0, shoulder=40.0,
@@ -155,18 +215,36 @@ def main(argv: list[str] | None = None) -> int:
         tension_thresholds=thresholds,
     )
 
+    # Select garment spec
+    garment_spec = None
+    if garment_type == "skirt":
+        from agentic_pattern_engine.skirt_generator import (
+            SkirtGarmentSpec,
+        )
+        garment_spec = SkirtGarmentSpec()
+
     print(f"Running Agentic Pattern Engine...")
-    print(f"  Chest: {profile.chest} cm")
-    print(f"  Waist: {profile.waist} cm")
-    print(f"  Hip: {profile.hip} cm")
-    print(f"  Shoulder: {profile.shoulder_width} cm")
-    print(f"  Torso: {profile.torso_length} cm")
+    print(f"  Garment: {garment_type}")
+    if garment_type == "skirt":
+        print(f"  Waist: {profile.waist} cm")
+        print(f"  Hip: {profile.hip} cm")
+        print(f"  Hip depth: {profile.hip_depth} cm")
+        print(f"  Desired length: {profile.desired_length} cm")
+    else:
+        print(f"  Chest: {profile.chest} cm")
+        print(f"  Waist: {profile.waist} cm")
+        print(f"  Hip: {profile.hip} cm")
+        print(f"  Shoulder: {profile.shoulder_width} cm")
+        print(f"  Torso: {profile.torso_length} cm")
     print(f"  Iteration limit: {config.iteration_limit}")
     if args.tight_thresholds:
-        print(f"  Thresholds: TIGHT (bust={thresholds.bust}, waist={thresholds.waist}, ...)")
+        print(
+            f"  Thresholds: TIGHT "
+            f"(bust={thresholds.bust}, waist={thresholds.waist}, ...)"
+        )
     print()
 
-    agent = AgentOrchestrator()
+    agent = AgentOrchestrator(garment_spec=garment_spec)
     result = agent.run(profile, config)
 
     # Verbose: show full audit trail
