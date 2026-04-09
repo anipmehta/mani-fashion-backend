@@ -82,3 +82,26 @@ def test_invalid_threshold_rejection(thresholds: TensionThresholds) -> None:
     assert len(errors) > 0, (
         f"Expected validation errors for thresholds {thresholds}, got none"
     )
+
+
+# ---------------------------------------------------------------------------
+# SkirtMeasurementProfile validation
+# ---------------------------------------------------------------------------
+
+from agentic_pattern_engine.models import SkirtMeasurementProfile
+
+
+def test_skirt_profile_mini_skirt_length_valid() -> None:
+    """A 30cm (12 inch) mini skirt should pass validation."""
+    mini = SkirtMeasurementProfile(
+        waist=73.5, hip=98.0, hip_depth=20.0, desired_length=30.0,
+    )
+    assert mini.validate() == []
+
+
+def test_skirt_profile_desired_length_at_new_minimum() -> None:
+    """25cm is the minimum allowed length."""
+    boundary = SkirtMeasurementProfile(
+        waist=73.5, hip=98.0, hip_depth=20.0, desired_length=25.0,
+    )
+    assert boundary.validate() == []

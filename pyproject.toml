@@ -12,6 +12,8 @@ dependencies = [
     "ezdxf>=0.18",
     "reportlab>=4.0",
     "trimesh>=4.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
     # --- Libraries requiring manual / special installation ---
     # pygarment          — parametric sewing pattern DSL (GarmentCode); install from source
     # smplx              — SMPL-X body model; install via `pip install smplx` + download model files
@@ -24,6 +26,7 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "hypothesis>=6.0",
+    "httpx>=0.24",
 ]
 
 [tool.pytest.ini_options]

@@ -76,7 +76,7 @@ def test_skirt_profile_hip_depth_above_range() -> None:
 
 def test_skirt_profile_desired_length_below_range() -> None:
     bad = SkirtMeasurementProfile(
-        waist=73.5, hip=98.0, hip_depth=20.0, desired_length=30.0,
+        waist=73.5, hip=98.0, hip_depth=20.0, desired_length=20.0,
     )
     errors = bad.validate()
     assert any("desired_length" in e for e in errors)
@@ -222,3 +222,4 @@ def test_skirt_generator_all_profiles() -> None:
             assert piece.outline[0] == piece.outline[-1]
             assert len(piece.darts) >= 1
             assert len(piece.seam_lines) >= 4
+
