@@ -187,823 +187,263 @@ Files modified:
 
 ## Low-Level Design (LLD)
 
-### CanonicalScanData
+### Data Models
 
-```python
-@dataclass(frozen=True)
-class CanonicalScanData:
-    """Engine-owned canonical scanner JSON schema.
-    
-    All scanner adapters map their format to this intermediate
-    representation before conversion to MeasurementProfile or
-    SkirtMeasurementProfile.
-    """
-    # Required fields
-    chest: float
-    waist: float
-    hip: float
-    shoulder_width: float
-    torso_length: float
-    hip_depth: float
-    desired_length: float
-    units: str                          # "cm" or "in"
-    source_scanner: str                 # scanner ID or "canonical"
-
-    # Optional fields
-    arm_length: float | None = None
-    inseam: float | None = None
-    garment_type_hint: str | None = None  # "bodice", "skirt", or None
-    scanner_metadata: dict | None = None  # opaque scanner-specific data
-
-    def validate(self) -> list[str]:
-        """Return error strings for missing required fields and
-        out-of-range values."""
-        errors: list[str] = []
-        if self.units not in ("cm", "in"):
-            errors.append(
-                f"units must be 'cm' or 'in', got '{self.units}'"
-            )
-        required = [
-            "chest", "waist", "hip", "shoulder_width",
-            "torso_length", "hip_depth", "desired_length",
-        ]
-        for fld in required:
-            val = getattr(self, fld)
-            if val is None:
-                errors.append(f"{fld} is missing")
-            elif not isinstance(val, (int, float)):
-                errors.append(
-                    f"{fld} must be numeric, got {type(val).__name__}"
-                )
-            elif np.isnan(val) or np.isinf(val):
-                errors.append(f"{fld}={val} is not a finite number")
-        return errors
-
-    def to_dict(self) -> dict:
-        """Serialize to dict for round-trip testing."""
-        return dataclasses.asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> CanonicalScanData:
-        """Deserialize from dict."""
-        return cls(**{
-            k: v for k, v in data.items()
-            if k in {f.name for f in dataclasses.fields(cls)}
-        })
-```
-
-### MeshData
-
-```python
-@dataclass(frozen=True)
-class MeshData:
-    """3D mesh data for future body model fitting.
-    
-    Defined in this milestone but no concrete implementation provided.
-    """
-    vertices: np.ndarray   # (N, 3) float64
-    faces: np.ndarray      # (M, 3) int32
-```
-
-### ScannerResult
-
-```python
-@dataclass(frozen=True)
-class ScannerResult:
-    """Result of scanner profile adapter processing."""
-    profile: MeasurementProfile | SkirtMeasurementProfile | None
-    bodice_profile: MeasurementProfile | None
-    skirt_profile: SkirtMeasurementProfile | None
-    garment_hints: list[str]          # ["bodice"], ["skirt"], or ["bodice", "skirt"]
-    canonical_data: CanonicalScanData | None
-    warnings: list[str]
-    errors: list[str]
-```
-
-### ScannerAdapter Protocol
-
-```python
-from typing import Protocol, runtime_checkable
-
-@runtime_checkable
-class ScannerAdapter(Protocol):
-    """Pluggable adapter for converting scanner JSON to canonical format."""
-
-    @property
-    def scanner_id(self) -> str:
-        """Unique identifier, e.g. '3dlook', 'size_stream', 'canonical'."""
-        ...
-
-    def can_handle(self, raw_data: dict) -> bool:
-        """Return True if raw_data matches this scanner's format."""
-        ...
-
-    def extract(self, raw_data: dict) -> CanonicalScanData:
-        """Map scanner fields to CanonicalScanData.
-        
-        Raises ValueError if required scanner-specific fields are missing.
-        """
-        ...
-```
-
-### CanonicalAdapter
-
-```python
-class CanonicalAdapter:
-    """Handles JSON already in the engine's canonical format."""
-
-    @property
-    def scanner_id(self) -> str:
-        return "canonical"
-
-    def can_handle(self, raw_data: dict) -> bool:
-        return raw_data.get("source_scanner") == "canonical"
-
-    def extract(self, raw_data: dict) -> CanonicalScanData:
-        required = [
-            "chest", "waist", "hip", "shoulder_width",
-            "torso_length", "hip_depth", "desired_length", "units",
-        ]
-        missing = [f for f in required if f not in raw_data]
-        if missing:
-            raise ValueError(
-                f"Canonical format missing fields: {', '.join(missing)}"
-            )
-        return CanonicalScanData.from_dict(raw_data)
-```
-
-### ThreeDLookAdapter
-
-```python
-class ThreeDLookAdapter:
-    """Maps 3DLOOK JSON output to canonical format.
-    
-    3DLOOK JSON structure:
-    {
-        "front_params": {
-            "chest": 91.5,
-            "waist": 73.5,
-            "hips": 98.0,
-            "shoulder_width": 40.0,
-            "torso_height": 42.5,
-            "hip_depth": 20.0,
-            ...
-        },
-        "unit": "cm"
-    }
-    """
-
-    FIELD_MAP = {
-        "chest": "front_params.chest",
-        "waist": "front_params.waist",
-        "hip": "front_params.hips",
-        "shoulder_width": "front_params.shoulder_width",
-        "torso_length": "front_params.torso_height",
-        "hip_depth": "front_params.hip_depth",
+```mermaid
+classDiagram
+    class CanonicalScanData {
+        <<frozen dataclass>>
+        +chest : float
+        +waist : float
+        +hip : float
+        +shoulder_width : float
+        +torso_length : float
+        +hip_depth : float
+        +desired_length : float
+        +units : str
+        +source_scanner : str
+        +arm_length : float | None
+        +inseam : float | None
+        +garment_type_hint : str | None
+        +scanner_metadata : dict | None
+        +validate() list~str~
+        +to_dict() dict
+        +from_dict(data: dict)$ CanonicalScanData
     }
 
-    @property
-    def scanner_id(self) -> str:
-        return "3dlook"
-
-    def can_handle(self, raw_data: dict) -> bool:
-        fp = raw_data.get("front_params", {})
-        return isinstance(fp, dict) and "chest" in fp
-
-    def extract(self, raw_data: dict) -> CanonicalScanData:
-        fp = raw_data.get("front_params", {})
-        missing = [
-            k for k, path in self.FIELD_MAP.items()
-            if path.split(".")[-1] not in fp
-        ]
-        if missing:
-            raise ValueError(
-                f"3DLOOK format missing fields: {', '.join(missing)}"
-            )
-        units = raw_data.get("unit", "cm")
-        return CanonicalScanData(
-            chest=fp["chest"],
-            waist=fp["waist"],
-            hip=fp["hips"],
-            shoulder_width=fp["shoulder_width"],
-            torso_length=fp["torso_height"],
-            hip_depth=fp["hip_depth"],
-            desired_length=fp.get("desired_length", 60.0),
-            units=units,
-            source_scanner="3dlook",
-            arm_length=fp.get("arm_length"),
-            inseam=fp.get("inseam"),
-            garment_type_hint=raw_data.get("garment_type_hint"),
-            scanner_metadata=raw_data.get("metadata"),
-        )
-```
-
-### SizeStreamAdapter
-
-```python
-class SizeStreamAdapter:
-    """Maps Size Stream JSON output to canonical format.
-    
-    Size Stream JSON structure:
-    {
-        "header": {"units": "in", "version": "2.0", ...},
-        "measurements": {
-            "bust_girth": 36.0,
-            "waist_girth": 29.0,
-            "hip_girth": 38.5,
-            "shoulder_breadth": 15.7,
-            "torso_length": 16.7,
-            "hip_depth_length": 7.9,
-            ...
-        }
-    }
-    """
-
-    FIELD_MAP = {
-        "chest": "bust_girth",
-        "waist": "waist_girth",
-        "hip": "hip_girth",
-        "shoulder_width": "shoulder_breadth",
-        "torso_length": "torso_length",
-        "hip_depth": "hip_depth_length",
+    class MeshData {
+        <<frozen dataclass>>
+        +vertices : ndarray  &#40;N,3&#41; float64
+        +faces : ndarray  &#40;M,3&#41; int32
     }
 
-    @property
-    def scanner_id(self) -> str:
-        return "size_stream"
+    class ScannerResult {
+        <<frozen dataclass>>
+        +profile : MeasurementProfile | SkirtMeasurementProfile | None
+        +bodice_profile : MeasurementProfile | None
+        +skirt_profile : SkirtMeasurementProfile | None
+        +garment_hints : list~str~
+        +canonical_data : CanonicalScanData | None
+        +warnings : list~str~
+        +errors : list~str~
+    }
 
-    def can_handle(self, raw_data: dict) -> bool:
-        m = raw_data.get("measurements", {})
-        return (
-            isinstance(m, dict)
-            and "bust_girth" in m
-            and "header" in raw_data
-        )
+    class MeasurementProfile {
+        <<frozen dataclass>>
+        +chest : float
+        +waist : float
+        +hip : float
+        +shoulder_width : float
+        +torso_length : float
+        +validate() list~str~
+    }
 
-    def extract(self, raw_data: dict) -> CanonicalScanData:
-        m = raw_data.get("measurements", {})
-        missing = [
-            canon for canon, scanner in self.FIELD_MAP.items()
-            if scanner not in m
-        ]
-        if missing:
-            raise ValueError(
-                f"Size Stream format missing fields: {', '.join(missing)}"
-            )
-        header = raw_data.get("header", {})
-        units = header.get("units", "in")
-        return CanonicalScanData(
-            chest=m["bust_girth"],
-            waist=m["waist_girth"],
-            hip=m["hip_girth"],
-            shoulder_width=m["shoulder_breadth"],
-            torso_length=m["torso_length"],
-            hip_depth=m["hip_depth_length"],
-            desired_length=m.get("desired_length", 60.0),
-            units=units,
-            source_scanner="size_stream",
-            arm_length=m.get("arm_length"),
-            inseam=m.get("inseam"),
-            garment_type_hint=raw_data.get("garment_type_hint"),
-            scanner_metadata=raw_data.get("metadata"),
-        )
+    class SkirtMeasurementProfile {
+        <<frozen dataclass>>
+        +waist : float
+        +hip : float
+        +hip_depth : float
+        +desired_length : float
+        +validate() list~str~
+    }
+
+    ScannerResult --> CanonicalScanData : canonical_data
+    ScannerResult --> MeasurementProfile : bodice_profile
+    ScannerResult --> SkirtMeasurementProfile : skirt_profile
 ```
 
-### ScannerRegistry
+### Scanner Adapter Protocol & Implementations
 
-```python
-class ScannerRegistry:
-    """Ordered registry of ScannerAdapter instances."""
+```mermaid
+classDiagram
+    class ScannerAdapter {
+        <<protocol, runtime_checkable>>
+        +scanner_id : str
+        +can_handle(raw_data: dict) bool
+        +extract(raw_data: dict) CanonicalScanData
+    }
 
-    def __init__(self) -> None:
-        self._adapters: list[ScannerAdapter] = []
-        self._by_id: dict[str, ScannerAdapter] = {}
+    class CanonicalAdapter {
+        +scanner_id : str = "canonical"
+        +can_handle(raw_data: dict) bool
+        +extract(raw_data: dict) CanonicalScanData
+    }
 
-    def register(self, adapter: ScannerAdapter) -> None:
-        """Add adapter to registry. Replaces existing with same ID."""
-        self._adapters = [
-            a for a in self._adapters
-            if a.scanner_id != adapter.scanner_id
-        ]
-        self._adapters.append(adapter)
-        self._by_id[adapter.scanner_id] = adapter
+    class ThreeDLookAdapter {
+        +FIELD_MAP : dict~str, str~
+        +scanner_id : str = "3dlook"
+        +can_handle(raw_data: dict) bool
+        +extract(raw_data: dict) CanonicalScanData
+    }
 
-    def get_adapters(self) -> list[ScannerAdapter]:
-        """Return all adapters in registration order."""
-        return list(self._adapters)
+    class SizeStreamAdapter {
+        +FIELD_MAP : dict~str, str~
+        +scanner_id : str = "size_stream"
+        +can_handle(raw_data: dict) bool
+        +extract(raw_data: dict) CanonicalScanData
+    }
 
-    def get_adapter_by_id(self, scanner_id: str) -> ScannerAdapter:
-        """Return adapter by ID. Raises KeyError if not found."""
-        if scanner_id not in self._by_id:
-            registered = list(self._by_id.keys())
-            raise KeyError(
-                f"Unknown scanner '{scanner_id}'. "
-                f"Registered: {registered}"
-            )
-        return self._by_id[scanner_id]
+    ScannerAdapter <|.. CanonicalAdapter : implements
+    ScannerAdapter <|.. ThreeDLookAdapter : implements
+    ScannerAdapter <|.. SizeStreamAdapter : implements
 
-
-def _build_default_registry() -> ScannerRegistry:
-    """Create registry pre-loaded with built-in adapters."""
-    reg = ScannerRegistry()
-    reg.register(CanonicalAdapter())
-    reg.register(ThreeDLookAdapter())
-    reg.register(SizeStreamAdapter())
-    return reg
-
-
-# Module-level singleton
-default_registry = _build_default_registry()
+    CanonicalAdapter ..> CanonicalScanData : produces
+    ThreeDLookAdapter ..> CanonicalScanData : produces
+    SizeStreamAdapter ..> CanonicalScanData : produces
 ```
 
-### FormatDetector
+### Adapter Field Mappings
 
-```python
-class FormatDetector:
-    """Auto-detects scanner format from JSON structure."""
+#### ThreeDLookAdapter
 
-    def detect(
-        self,
-        raw_data: dict,
-        registry: ScannerRegistry,
-        scanner_hint: str | None = None,
-    ) -> ScannerAdapter:
-        """Select the appropriate adapter for the given JSON.
-        
-        If scanner_hint is provided, skips auto-detection and
-        directly selects the named adapter.
-        
-        If multiple adapters match, selects the one with highest
-        specificity (number of scanner-specific marker fields matched).
-        
-        Raises ValueError if no adapter matches.
-        """
-        if scanner_hint is not None:
-            return registry.get_adapter_by_id(scanner_hint)
+| Canonical Field | 3DLOOK JSON Path | Notes |
+|---|---|---|
+| `chest` | `front_params.chest` | Direct mapping |
+| `waist` | `front_params.waist` | Direct mapping |
+| `hip` | `front_params.hips` | Note plural "hips" |
+| `shoulder_width` | `front_params.shoulder_width` | Direct mapping |
+| `torso_length` | `front_params.torso_height` | Renamed: height → length |
+| `hip_depth` | `front_params.hip_depth` | Direct mapping |
+| `units` | `unit` | Top-level key, default "cm" |
 
-        matches: list[ScannerAdapter] = []
-        for adapter in registry.get_adapters():
-            if adapter.can_handle(raw_data):
-                matches.append(adapter)
+Detection signature: `front_params` key with nested `chest` field.
 
-        if not matches:
-            ids = [a.scanner_id for a in registry.get_adapters()]
-            raise ValueError(
-                f"Unrecognized scanner format. "
-                f"Registered formats: {ids}"
-            )
+#### SizeStreamAdapter
 
-        if len(matches) == 1:
-            return matches[0]
+| Canonical Field | Size Stream JSON Path | Notes |
+|---|---|---|
+| `chest` | `measurements.bust_girth` | Renamed: bust_girth → chest |
+| `waist` | `measurements.waist_girth` | Renamed: waist_girth → waist |
+| `hip` | `measurements.hip_girth` | Renamed: hip_girth → hip |
+| `shoulder_width` | `measurements.shoulder_breadth` | Renamed: breadth → width |
+| `torso_length` | `measurements.torso_length` | Direct mapping |
+| `hip_depth` | `measurements.hip_depth_length` | Renamed: hip_depth_length → hip_depth |
+| `units` | `header.units` | Nested in header, default "in" |
 
-        # Multiple matches: select highest specificity
-        # Specificity = number of scanner-specific keys present
-        return max(
-            matches,
-            key=lambda a: self._specificity(a, raw_data),
-        )
+Detection signature: `measurements` key with nested `bust_girth` field AND `header` key.
 
-    def _specificity(
-        self, adapter: ScannerAdapter, raw_data: dict,
-    ) -> int:
-        """Count scanner-specific marker fields present in raw_data."""
-        if hasattr(adapter, "FIELD_MAP"):
-            return sum(
-                1 for path in adapter.FIELD_MAP.values()
-                if self._resolve_path(raw_data, path) is not None
-            )
-        return 0
+#### CanonicalAdapter
 
-    def _resolve_path(
-        self, data: dict, dotted_path: str,
-    ) -> object | None:
-        """Resolve a dotted path like 'front_params.chest'."""
-        current = data
-        for key in dotted_path.split("."):
-            if isinstance(current, dict) and key in current:
-                current = current[key]
-            else:
-                return None
-        return current
+Handles JSON already in the engine's canonical format. Detection signature: `source_scanner` field set to `"canonical"`. Passes through directly via `CanonicalScanData.from_dict()`.
+
+### Registry, Detection & Conversion
+
+```mermaid
+classDiagram
+    class ScannerRegistry {
+        -_adapters : list~ScannerAdapter~
+        -_by_id : dict~str, ScannerAdapter~
+        +register(adapter: ScannerAdapter) None
+        +get_adapters() list~ScannerAdapter~
+        +get_adapter_by_id(scanner_id: str) ScannerAdapter
+    }
+
+    class FormatDetector {
+        +detect(raw_data: dict, registry: ScannerRegistry, scanner_hint: str | None) ScannerAdapter
+        -_specificity(adapter: ScannerAdapter, raw_data: dict) int
+        -_resolve_path(data: dict, dotted_path: str) object | None
+    }
+
+    class UnitConverter {
+        +CM_PER_INCH : float = 2.54$
+        +inches_to_cm(value: float)$ float
+        +cm_to_inches(value: float)$ float
+        +convert_scan_data(scan_data: CanonicalScanData)$ CanonicalScanData
+    }
+
+    class ScannerProfileAdapter {
+        -_registry : ScannerRegistry
+        -_detector : FormatDetector
+        +process(raw_data: dict, scanner_hint: str | None, garment_override: str | None) ScannerResult
+        -_compute_garment_hints(scan_data: CanonicalScanData) list~str~
+        -_validate_finite(scan_data: CanonicalScanData) list~str~
+    }
+
+    ScannerRegistry "1" o-- "*" ScannerAdapter : contains
+    FormatDetector --> ScannerRegistry : queries
+    ScannerProfileAdapter --> FormatDetector : uses
+    ScannerProfileAdapter --> ScannerRegistry : uses
+    ScannerProfileAdapter --> UnitConverter : uses
+    ScannerProfileAdapter ..> ScannerResult : produces
 ```
 
-### UnitConverter
+### Default Registry Initialization
 
-```python
-class UnitConverter:
-    """Converts measurement values between inches and centimeters."""
+The module-level singleton `default_registry` is built at import time via `_build_default_registry()`, which registers the three built-in adapters in order:
 
-    CM_PER_INCH: float = 2.54
+1. `CanonicalAdapter` (scanner_id: `"canonical"`)
+2. `ThreeDLookAdapter` (scanner_id: `"3dlook"`)
+3. `SizeStreamAdapter` (scanner_id: `"size_stream"`)
 
-    @classmethod
-    def inches_to_cm(cls, value: float) -> float:
-        return value * cls.CM_PER_INCH
+### ScannerProfileAdapter Orchestration Flow
 
-    @classmethod
-    def cm_to_inches(cls, value: float) -> float:
-        return value / cls.CM_PER_INCH
+The `process()` method chains these steps in order:
 
-    @classmethod
-    def convert_scan_data(
-        cls, scan_data: CanonicalScanData,
-    ) -> CanonicalScanData:
-        """Convert all measurement fields from inches to cm.
-        
-        Returns a new CanonicalScanData with units='cm'.
-        Only converts if units == 'in'; passes through if already 'cm'.
-        """
-        if scan_data.units == "cm":
-            return scan_data
+1. **Detect format** — via `FormatDetector.detect()` (uses `scanner_hint` if provided, otherwise iterates adapters)
+2. **Extract** — calls selected adapter's `extract()` → produces `CanonicalScanData`
+3. **Validate canonical data** — calls `CanonicalScanData.validate()` for schema-level errors
+4. **Unit conversion** — if `units == "in"`, calls `UnitConverter.convert_scan_data()` → new `CanonicalScanData` with `units="cm"`
+5. **Validate finiteness** — checks all numeric fields are finite (not NaN/Inf)
+6. **Compute garment hints** — determines `["bodice"]`, `["skirt"]`, or both based on available measurements; `garment_override` from CLI takes precedence
+7. **Construct profiles** — builds `MeasurementProfile` and/or `SkirtMeasurementProfile`, runs their `validate()` methods
 
-        measurement_fields = [
-            "chest", "waist", "hip", "shoulder_width",
-            "torso_length", "hip_depth", "desired_length",
-            "arm_length", "inseam",
-        ]
-        updates: dict = {"units": "cm"}
-        for fld in measurement_fields:
-            val = getattr(scan_data, fld)
-            if val is not None:
-                updates[fld] = cls.inches_to_cm(val)
+Errors at any step are collected into `ScannerResult.errors`. Steps 1–2 short-circuit on failure (return immediately). Steps 3–5 accumulate errors and short-circuit before profile construction. Steps 6–7 accumulate errors into the final result.
 
-        return dataclasses.replace(scan_data, **updates)
+### Mesh Input Protocol (Future)
+
+```mermaid
+classDiagram
+    class MeshInputProtocol {
+        <<protocol, runtime_checkable>>
+        +supported_formats : list~str~
+        +load_mesh(file_path: str) MeshData
+        +extract_measurements(mesh: MeshData) CanonicalScanData
+    }
+
+    class MeshInputPlaceholder {
+        +supported_formats : list~str~ = [".obj", ".ply"]
+        +load_mesh(file_path: str) MeshData
+        +extract_measurements(mesh: MeshData) CanonicalScanData
+    }
+
+    MeshInputProtocol <|.. MeshInputPlaceholder : implements
+    MeshInputPlaceholder ..> MeshData : uses
+    MeshInputPlaceholder ..> CanonicalScanData : produces
 ```
 
-### ScannerProfileAdapter
-
-```python
-class ScannerProfileAdapter:
-    """Single entry-point for scanner integration.
-    
-    Orchestrates: format detection → extraction → unit conversion →
-    validation → garment hinting → profile construction.
-    """
-
-    def __init__(
-        self,
-        registry: ScannerRegistry | None = None,
-    ) -> None:
-        self._registry = registry or default_registry
-        self._detector = FormatDetector()
-
-    def process(
-        self,
-        raw_data: dict,
-        scanner_hint: str | None = None,
-        garment_override: str | None = None,
-    ) -> ScannerResult:
-        """Process raw scanner JSON and return profiles + hints.
-        
-        Args:
-            raw_data: Parsed JSON dict from scanner file.
-            scanner_hint: Optional scanner format ID to skip auto-detection.
-            garment_override: Optional garment type override from CLI.
-        
-        Returns:
-            ScannerResult with profiles, garment hints, warnings, errors.
-        """
-        errors: list[str] = []
-        warnings: list[str] = []
-
-        # 1. Detect format
-        try:
-            adapter = self._detector.detect(
-                raw_data, self._registry, scanner_hint,
-            )
-        except (ValueError, KeyError) as e:
-            return ScannerResult(
-                profile=None, bodice_profile=None,
-                skirt_profile=None, garment_hints=[],
-                canonical_data=None, warnings=[], errors=[str(e)],
-            )
-
-        # 2. Extract to canonical format
-        try:
-            scan_data = adapter.extract(raw_data)
-        except ValueError as e:
-            return ScannerResult(
-                profile=None, bodice_profile=None,
-                skirt_profile=None, garment_hints=[],
-                canonical_data=None, warnings=[], errors=[str(e)],
-            )
-
-        # 3. Validate canonical data
-        canon_errors = scan_data.validate()
-        if canon_errors:
-            errors.extend(canon_errors)
-
-        # 4. Unit conversion
-        if scan_data.units == "in":
-            scan_data = UnitConverter.convert_scan_data(scan_data)
-
-        # 5. Validate finiteness
-        finite_errors = self._validate_finite(scan_data)
-        errors.extend(finite_errors)
-
-        if errors:
-            return ScannerResult(
-                profile=None, bodice_profile=None,
-                skirt_profile=None, garment_hints=[],
-                canonical_data=scan_data, warnings=warnings,
-                errors=errors,
-            )
-
-        # 6. Compute garment hints
-        hints = self._compute_garment_hints(scan_data)
-        if garment_override:
-            hints = [garment_override]
-
-        if not hints:
-            errors.append(
-                "Insufficient measurements for any garment type. "
-                f"Present: chest={scan_data.chest}, waist={scan_data.waist}, "
-                f"hip={scan_data.hip}, shoulder_width={scan_data.shoulder_width}, "
-                f"torso_length={scan_data.torso_length}, "
-                f"hip_depth={scan_data.hip_depth}, "
-                f"desired_length={scan_data.desired_length}"
-            )
-            return ScannerResult(
-                profile=None, bodice_profile=None,
-                skirt_profile=None, garment_hints=[],
-                canonical_data=scan_data, warnings=warnings,
-                errors=errors,
-            )
-
-        # 7. Construct profiles
-        bodice_profile = None
-        skirt_profile = None
-        if "bodice" in hints:
-            bodice_profile = MeasurementProfile(
-                chest=scan_data.chest,
-                waist=scan_data.waist,
-                hip=scan_data.hip,
-                shoulder_width=scan_data.shoulder_width,
-                torso_length=scan_data.torso_length,
-            )
-            bp_errors = bodice_profile.validate()
-            errors.extend(bp_errors)
-
-        if "skirt" in hints:
-            skirt_profile = SkirtMeasurementProfile(
-                waist=scan_data.waist,
-                hip=scan_data.hip,
-                hip_depth=scan_data.hip_depth,
-                desired_length=scan_data.desired_length,
-            )
-            sp_errors = skirt_profile.validate()
-            errors.extend(sp_errors)
-
-        primary = bodice_profile or skirt_profile
-
-        return ScannerResult(
-            profile=primary,
-            bodice_profile=bodice_profile,
-            skirt_profile=skirt_profile,
-            garment_hints=hints,
-            canonical_data=scan_data,
-            warnings=warnings,
-            errors=errors,
-        )
-
-    def _compute_garment_hints(
-        self, scan_data: CanonicalScanData,
-    ) -> list[str]:
-        """Determine which garment types are supported."""
-        if scan_data.garment_type_hint:
-            return [scan_data.garment_type_hint]
-
-        hints: list[str] = []
-        bodice_fields = [
-            scan_data.chest, scan_data.waist, scan_data.hip,
-            scan_data.shoulder_width, scan_data.torso_length,
-        ]
-        if all(v is not None and v > 0 for v in bodice_fields):
-            hints.append("bodice")
-
-        skirt_fields = [
-            scan_data.waist, scan_data.hip,
-            scan_data.hip_depth, scan_data.desired_length,
-        ]
-        if all(v is not None and v > 0 for v in skirt_fields):
-            hints.append("skirt")
-
-        return hints
-
-    def _validate_finite(
-        self, scan_data: CanonicalScanData,
-    ) -> list[str]:
-        """Validate all numeric fields are finite."""
-        errors: list[str] = []
-        fields = [
-            "chest", "waist", "hip", "shoulder_width",
-            "torso_length", "hip_depth", "desired_length",
-            "arm_length", "inseam",
-        ]
-        for fld in fields:
-            val = getattr(scan_data, fld)
-            if val is not None and (np.isnan(val) or np.isinf(val)):
-                errors.append(f"{fld}={val} is not a finite number")
-        return errors
-```
-
-### MeshInputProtocol (Future)
-
-```python
-@runtime_checkable
-class MeshInputProtocol(Protocol):
-    """Protocol for future 3D mesh input adapters.
-    
-    Defined in this milestone but no concrete implementation provided.
-    """
-
-    @property
-    def supported_formats(self) -> list[str]:
-        """Supported file extensions, e.g. ['.obj', '.ply']."""
-        ...
-
-    def load_mesh(self, file_path: str) -> MeshData:
-        """Load a 3D mesh file and return MeshData."""
-        ...
-
-    def extract_measurements(
-        self, mesh: MeshData,
-    ) -> CanonicalScanData:
-        """Derive body measurements from a 3D mesh."""
-        ...
-
-
-class MeshInputPlaceholder:
-    """Placeholder implementation that raises NotImplementedError."""
-
-    @property
-    def supported_formats(self) -> list[str]:
-        return [".obj", ".ply"]
-
-    def load_mesh(self, file_path: str) -> MeshData:
-        raise NotImplementedError(
-            "Mesh input is not implemented in this milestone"
-        )
-
-    def extract_measurements(
-        self, mesh: MeshData,
-    ) -> CanonicalScanData:
-        raise NotImplementedError(
-            "Mesh measurement extraction is not implemented "
-            "in this milestone"
-        )
-```
+`MeshInputPlaceholder` raises `NotImplementedError` on all method calls. Defined in this milestone for interface stability; no concrete implementation provided.
 
 ### CLI Modifications
 
-```python
-# In _parse_args():
-# Add --scan to the mutually exclusive group
-g = p.add_mutually_exclusive_group(required=True)
-g.add_argument("--profile", type=str, help="Path to JSON measurement file")
-g.add_argument("--chest", type=float, help="Chest circumference (cm)")
-g.add_argument("--waist-primary", type=float, dest="waist_primary",
-               help="Waist circumference (cm) — skirt primary")
-g.add_argument("--scan", type=str,
-               help="Path to scanner JSON file for auto-detection")
+| Flag | Type | Mutual Exclusion Group | Default | Description |
+|---|---|---|---|---|
+| `--scan` | `str` (file path) | Yes (with `--chest`, `--waist-primary`, `--profile`) | None | Path to scanner JSON file for auto-detection |
+| `--scanner-format` | `str` | No | None | Scanner format hint (e.g. `"3dlook"`, `"size_stream"`) to bypass auto-detection |
 
-# Add optional scanner format hint
-p.add_argument("--scanner-format", type=str, default=None,
-               help="Scanner format hint (e.g. '3dlook', 'size_stream')")
+#### CLI `--scan` Behavior
 
-
-# In main():
-if args.scan:
-    import json
-    raw_data = json.loads(pathlib.Path(args.scan).read_text())
-    
-    from agentic_pattern_engine.scanner_adapter import (
-        ScannerProfileAdapter,
-    )
-    spa = ScannerProfileAdapter()
-    garment_override = args.garment if args.garment != "bodice" else None
-    result = spa.process(
-        raw_data,
-        scanner_hint=args.scanner_format,
-        garment_override=garment_override,
-    )
-
-    if result.errors:
-        for err in result.errors:
-            print(f"Error: {err}", file=sys.stderr)
-        return 1
-
-    if args.verbose:
-        print(f"Scanner format: {result.canonical_data.source_scanner}")
-        print(f"Garment hints: {result.garment_hints}")
-        # Print extracted measurements...
-
-    # Select garment type from hints or --garment override
-    garment_type = args.garment
-    if not garment_override and result.garment_hints:
-        garment_type = result.garment_hints[0]
-
-    if garment_type == "skirt":
-        profile = result.skirt_profile
-    else:
-        profile = result.bodice_profile
-
-    # Continue with existing engine flow...
-```
+| Condition | Behavior |
+|---|---|
+| `--scan` provided | Load JSON file, pass to `ScannerProfileAdapter.process()` |
+| `--scan` + `--scanner-format` | Pass `scanner_hint` to `FormatDetector`, skip auto-detection |
+| `--scan` without `--garment` | Use first garment hint from `ScannerProfileAdapter` |
+| `--scan` + `--garment` | Use user-specified garment type, override scanner hint |
+| `--scan` + `--verbose` | Print detected scanner format, extracted measurements, unit conversion details, garment hint |
+| `ScannerResult.errors` non-empty | Print each error to stderr, exit with code 1 |
+| `--scan` + `--chest`/`--profile`/`--waist-primary` | argparse mutual exclusion error, exit with code 2 |
 
 ### Hypothesis Custom Strategies
 
-```python
-from hypothesis import strategies as st
+The following Hypothesis strategies are used for property-based testing. All strategies generate values within anatomically plausible ranges.
 
-def valid_canonical_scan_data(units: str = "cm"):
-    """Generate valid CanonicalScanData instances."""
-    return st.builds(
-        CanonicalScanData,
-        chest=st.floats(min_value=60.0, max_value=180.0),
-        waist=st.floats(min_value=50.0, max_value=170.0),
-        hip=st.floats(min_value=60.0, max_value=180.0),
-        shoulder_width=st.floats(min_value=30.0, max_value=65.0),
-        torso_length=st.floats(min_value=35.0, max_value=75.0),
-        hip_depth=st.floats(min_value=15.0, max_value=30.0),
-        desired_length=st.floats(min_value=40.0, max_value=130.0),
-        units=st.just(units),
-        source_scanner=st.just("canonical"),
-        arm_length=st.one_of(st.none(), st.floats(min_value=50.0, max_value=90.0)),
-        inseam=st.one_of(st.none(), st.floats(min_value=60.0, max_value=100.0)),
-        garment_type_hint=st.one_of(
-            st.none(), st.sampled_from(["bodice", "skirt"]),
-        ),
-        scanner_metadata=st.none(),
-    )
+| Strategy | Description | Key Ranges |
+|---|---|---|
+| `valid_canonical_scan_data(units="cm")` | Generates valid `CanonicalScanData` in cm | chest: 60–180, waist: 50–170, hip: 60–180, shoulder_width: 30–65, torso_length: 35–75, hip_depth: 15–30, desired_length: 40–130 |
+| `valid_canonical_scan_data_inches()` | Generates valid `CanonicalScanData` in inches | Same ranges converted to inches (÷ 2.54) |
+| `valid_3dlook_json()` | Generates valid 3DLOOK-format JSON dicts | Same cm ranges, `unit` sampled from `["cm", "in"]` |
+| `valid_size_stream_json()` | Generates valid Size Stream-format JSON dicts | Same cm ranges, `header.units` sampled from `["cm", "in"]` |
 
-
-def valid_canonical_scan_data_inches():
-    """Generate valid CanonicalScanData in inches."""
-    return st.builds(
-        CanonicalScanData,
-        chest=st.floats(min_value=23.6, max_value=70.9),   # 60-180 cm
-        waist=st.floats(min_value=19.7, max_value=66.9),   # 50-170 cm
-        hip=st.floats(min_value=23.6, max_value=70.9),     # 60-180 cm
-        shoulder_width=st.floats(min_value=11.8, max_value=25.6),
-        torso_length=st.floats(min_value=13.8, max_value=29.5),
-        hip_depth=st.floats(min_value=5.9, max_value=11.8),
-        desired_length=st.floats(min_value=15.7, max_value=51.2),
-        units=st.just("in"),
-        source_scanner=st.just("canonical"),
-        arm_length=st.none(),
-        inseam=st.none(),
-        garment_type_hint=st.none(),
-        scanner_metadata=st.none(),
-    )
-
-
-def valid_3dlook_json():
-    """Generate valid 3DLOOK-format JSON dicts."""
-    return st.builds(
-        lambda chest, waist, hips, sw, th, hd, unit: {
-            "front_params": {
-                "chest": chest,
-                "waist": waist,
-                "hips": hips,
-                "shoulder_width": sw,
-                "torso_height": th,
-                "hip_depth": hd,
-            },
-            "unit": unit,
-        },
-        chest=st.floats(min_value=60.0, max_value=180.0),
-        waist=st.floats(min_value=50.0, max_value=170.0),
-        hips=st.floats(min_value=60.0, max_value=180.0),
-        sw=st.floats(min_value=30.0, max_value=65.0),
-        th=st.floats(min_value=35.0, max_value=75.0),
-        hd=st.floats(min_value=15.0, max_value=30.0),
-        unit=st.sampled_from(["cm", "in"]),
-    )
-
-
-def valid_size_stream_json():
-    """Generate valid Size Stream-format JSON dicts."""
-    return st.builds(
-        lambda bg, wg, hg, sb, tl, hdl, units: {
-            "header": {"units": units, "version": "2.0"},
-            "measurements": {
-                "bust_girth": bg,
-                "waist_girth": wg,
-                "hip_girth": hg,
-                "shoulder_breadth": sb,
-                "torso_length": tl,
-                "hip_depth_length": hdl,
-            },
-        },
-        bg=st.floats(min_value=60.0, max_value=180.0),
-        wg=st.floats(min_value=50.0, max_value=170.0),
-        hg=st.floats(min_value=60.0, max_value=180.0),
-        sb=st.floats(min_value=30.0, max_value=65.0),
-        tl=st.floats(min_value=35.0, max_value=75.0),
-        hdl=st.floats(min_value=15.0, max_value=30.0),
-        units=st.sampled_from(["cm", "in"]),
-    )
-```
+Optional fields (`arm_length`, `inseam`, `garment_type_hint`) are generated as `None` or within plausible ranges. `scanner_metadata` is always `None` in test strategies.
 
 ---
 
