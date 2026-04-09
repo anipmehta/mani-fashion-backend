@@ -15,6 +15,25 @@ Measurements → Sloper Draft → Simulate → Detect Issues → Correct → Rep
 4. **Self-corrects** — widens dart angles, adjusts ease, redistributes fabric until all regions converge
 5. **Exports** — DXF (CAD), PDF (printable), OBJ (3D), and an interactive Three.js HTML visualization
 
+## Setup
+
+```bash
+# Clone and set up virtual environment
+git clone https://github.com/anipmehta/mani-fashion-backend.git
+cd mani-fashion-backend
+
+# Option 1: Quick setup (creates venv, installs deps, runs tests)
+chmod +x setup.sh
+./setup.sh
+
+# Option 2: Manual setup
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements-dev.txt
+pip install -e .
+python -m pytest --tb=short -q
+```
+
 ## Quick Start
 
 ```bash
