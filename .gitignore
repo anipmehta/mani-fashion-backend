@@ -28,3 +28,7 @@ PR_DESCRIPTION*.md
 
 # Kiro
 .kiro/
+
+# Virtual environment
+venv/
+.venv/
