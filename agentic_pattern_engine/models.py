@@ -323,7 +323,7 @@ class SkirtMeasurementProfile:
             "waist": (50.0, 170.0),
             "hip": (60.0, 180.0),
             "hip_depth": (15.0, 30.0),
-            "desired_length": (40.0, 130.0),
+            "desired_length": (25.0, 130.0),
         })
 
     def validate(self) -> list[str]:

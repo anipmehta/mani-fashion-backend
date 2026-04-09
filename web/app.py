@@ -1,0 +1,193 @@
+"""MANI Web App — FastAPI backend for pattern generation.
+
+Endpoints:
+  GET  /                          → HTML form
+  POST /api/generate              → run engine, return result
+  GET  /api/visualization/{id}    → Three.js HTML for a run
+  GET  /api/download/{id}/dxf     → DXF pattern file
+  GET  /api/download/{id}/pdf     → PDF pattern file
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from agentic_pattern_engine.agent_orchestrator import AgentOrchestrator
+from agentic_pattern_engine.garment_spec import BodiceGarmentSpec
+from agentic_pattern_engine.models import (
+    AgentConfig,
+    MeasurementProfile,
+    SkirtMeasurementProfile,
+)
+from agentic_pattern_engine.skirt_generator import SkirtGarmentSpec
+
+app = FastAPI(title="MANI Pattern Engine")
+
+# Serve static files (HTML frontend)
+import pathlib
+_STATIC_DIR = pathlib.Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """Serve the main HTML page."""
+    return (_STATIC_DIR / "index.html").read_text()
+
+# In-memory store for run results (demo only)
+_runs: dict[str, Any] = {}
+
+
+class GenerateRequest(BaseModel):
+    garment_type: str = "bodice"
+    chest: float | None = None
+    waist: float
+    hip: float
+    shoulder_width: float | None = None
+    torso_length: float | None = None
+    hip_depth: float | None = None
+    desired_length: float | None = None
+
+
+class GenerateResponse(BaseModel):
+    run_id: str
+    status: str
+    iterations: int
+    garment_type: str
+    elapsed_ms: float
+    errors: list[str] | None = None
+
+
+@app.post("/api/generate", response_model=GenerateResponse)
+def generate(req: GenerateRequest) -> GenerateResponse:
+    """Run the pattern engine and store results."""
+    errors: list[str] = []
+
+    if req.garment_type == "skirt":
+        if not req.hip_depth or not req.desired_length:
+            raise HTTPException(
+                400,
+                "hip_depth and desired_length required for skirt",
+            )
+        profile = SkirtMeasurementProfile(
+            waist=req.waist,
+            hip=req.hip,
+            hip_depth=req.hip_depth,
+            desired_length=req.desired_length,
+        )
+        spec = SkirtGarmentSpec()
+    else:
+        if not req.chest or not req.shoulder_width or not req.torso_length:
+            raise HTTPException(
+                400,
+                "chest, shoulder_width, torso_length required for bodice",
+            )
+        profile = MeasurementProfile(
+            chest=req.chest,
+            waist=req.waist,
+            hip=req.hip,
+            shoulder_width=req.shoulder_width,
+            torso_length=req.torso_length,
+        )
+        spec = BodiceGarmentSpec()
+
+    orch = AgentOrchestrator(garment_spec=spec)
+    result = orch.run(profile, AgentConfig(iteration_limit=20))
+
+    run_id = str(uuid.uuid4())[:8]
+
+    # Generate visualization HTML
+    viz_html = None
+    if req.garment_type == "bodice":
+        try:
+            from agentic_pattern_engine.body_model_builder import (
+                ParametricBodyModelBuilder,
+            )
+            from agentic_pattern_engine.html_visualizer import (
+                generate_visualization,
+            )
+
+            bm = ParametricBodyModelBuilder().build(profile)
+            viz_html = generate_visualization(
+                bm, result.audit_trail,
+            )
+        except Exception:
+            pass
+    elif req.garment_type == "skirt":
+        try:
+            from agentic_pattern_engine.skirt_visualizer import (
+                generate_skirt_visualization,
+            )
+
+            viz_html = generate_skirt_visualization(
+                profile, result.audit_trail,
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Skirt viz error: {e}")
+
+    _runs[run_id] = {
+        "result": result,
+        "profile": profile,
+        "garment_type": req.garment_type,
+        "viz_html": viz_html,
+    }
+
+    return GenerateResponse(
+        run_id=run_id,
+        status=result.convergence_status.value,
+        iterations=result.total_iterations,
+        garment_type=req.garment_type,
+        elapsed_ms=round(result.elapsed_time_ms, 1),
+        errors=[result.error_details] if result.error_details else None,
+    )
+
+
+@app.get("/api/visualization/{run_id}", response_class=HTMLResponse)
+def visualization(run_id: str) -> str:
+    """Return the Three.js visualization HTML."""
+    run = _runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run["viz_html"]:
+        return run["viz_html"]
+    return "<html><body><p>Visualization not available for this garment type.</p></body></html>"
+
+
+@app.get("/api/download/{run_id}/dxf")
+def download_dxf(run_id: str) -> Response:
+    """Download DXF pattern file."""
+    run = _runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    result = run["result"]
+    if not result.dxf_bytes:
+        raise HTTPException(404, "DXF not available")
+    return Response(
+        content=result.dxf_bytes,
+        media_type="application/dxf",
+        headers={"Content-Disposition": f"attachment; filename=pattern_{run_id}.dxf"},
+    )
+
+
+@app.get("/api/download/{run_id}/pdf")
+def download_pdf(run_id: str) -> Response:
+    """Download PDF pattern file."""
+    run = _runs.get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    result = run["result"]
+    if not result.pdf_bytes:
+        raise HTTPException(404, "PDF not available")
+    return Response(
+        content=result.pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=pattern_{run_id}.pdf"},
+    )

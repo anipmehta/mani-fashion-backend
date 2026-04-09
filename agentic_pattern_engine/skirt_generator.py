@@ -559,10 +559,20 @@ class SkirtGarmentSpec:
                             length=d.length,
                         )
                     # Widen the side seam to account for increased
-                    # dart intake — this changes garment dimensions
+                    # dart intake — scale more aggressively for
+                    # shorter skirts where there's less flare room
+                    length_factor = max(
+                        70.0 / max(
+                            self._last_profile.desired_length, 25.0,
+                        ),
+                        1.0,
+                    )
                     for j, pt in enumerate(outline_pts):
                         if pt.x > 0:
-                            scale = 1.0 + corr.magnitude * 0.015
+                            scale = (
+                                1.0
+                                + corr.magnitude * 0.015 * length_factor
+                            )
                             outline_pts[j] = Point2D(
                                 pt.x * scale, pt.y,
                             )
