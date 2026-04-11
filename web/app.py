@@ -6,6 +6,8 @@ Endpoints:
   GET  /api/visualization/{id}    → Three.js HTML for a run
   GET  /api/download/{id}/dxf     → DXF pattern file
   GET  /api/download/{id}/pdf     → PDF pattern file
+  POST /api/scan/upload           → parse scan data, return measurements
+  POST /api/scan/generate         → parse scan, run engine, return result
 """
 
 from __future__ import annotations
@@ -25,7 +27,14 @@ from agentic_pattern_engine.models import (
     MeasurementProfile,
     SkirtMeasurementProfile,
 )
+from agentic_pattern_engine.scanner import (
+    AdapterRegistry,
+    GarmentHint,
+    scan_result_to_bodice_profile,
+    scan_result_to_skirt_profile,
+)
 from agentic_pattern_engine.skirt_generator import SkirtGarmentSpec
+from agentic_pattern_engine.units import cm_to_inches
 
 app = FastAPI(title="MANI Pattern Engine")
 
@@ -190,4 +199,121 @@ def download_pdf(run_id: str) -> Response:
         content=result.pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=pattern_{run_id}.pdf"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scan endpoint models
+# ---------------------------------------------------------------------------
+
+
+class ScanUploadRequest(BaseModel):
+    scan_data: dict
+    output_unit: str = "cm"
+
+
+class ScanUploadResponse(BaseModel):
+    measurements: dict[str, float]
+    scanner_type: str
+    garment_hints: str
+    confidence_scores: dict[str, float] | None
+    source_unit: str
+
+
+class ScanGenerateRequest(BaseModel):
+    scan_data: dict
+    garment_type: str | None = None
+
+
+class ScanGenerateResponse(BaseModel):
+    run_id: str
+    status: str
+    iterations: int
+    garment_type: str
+    elapsed_ms: float
+    scanner_type: str
+    measurements: dict[str, float]
+
+
+# ---------------------------------------------------------------------------
+# Scan endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/scan/upload", response_model=ScanUploadResponse)
+def scan_upload(req: ScanUploadRequest) -> ScanUploadResponse:
+    """Parse scan data and return mapped measurements."""
+    try:
+        scan_result = AdapterRegistry().parse(req.scan_data)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+
+    measurements = dict(scan_result.measurements)
+    if req.output_unit == "in":
+        measurements = {
+            k: cm_to_inches(v) for k, v in measurements.items()
+        }
+
+    return ScanUploadResponse(
+        measurements=measurements,
+        scanner_type=scan_result.scanner_type,
+        garment_hints=scan_result.garment_hints.value,
+        confidence_scores=scan_result.confidence_scores,
+        source_unit=scan_result.source_unit,
+    )
+
+
+@app.post("/api/scan/generate", response_model=ScanGenerateResponse)
+def scan_generate(req: ScanGenerateRequest) -> ScanGenerateResponse:
+    """Parse scan data, build profile, run engine, return results."""
+    try:
+        scan_result = AdapterRegistry().parse(req.scan_data)
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+
+    # Determine garment type
+    if req.garment_type is not None:
+        garment_type = req.garment_type
+    else:
+        hint = scan_result.garment_hints
+        if hint in (GarmentHint.BOTH, GarmentHint.BODICE_ONLY):
+            garment_type = "bodice"
+        elif hint == GarmentHint.SKIRT_ONLY:
+            garment_type = "skirt"
+        else:
+            raise HTTPException(
+                400,
+                detail="Insufficient measurements for any garment type",
+            )
+
+    # Convert to profile and select spec
+    try:
+        if garment_type == "skirt":
+            profile = scan_result_to_skirt_profile(scan_result)
+            spec = SkirtGarmentSpec()
+        else:
+            profile = scan_result_to_bodice_profile(scan_result)
+            spec = BodiceGarmentSpec()
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+
+    orch = AgentOrchestrator(garment_spec=spec)
+    result = orch.run(profile, AgentConfig(iteration_limit=20))
+
+    run_id = str(uuid.uuid4())[:8]
+    _runs[run_id] = {
+        "result": result,
+        "profile": profile,
+        "garment_type": garment_type,
+        "viz_html": None,
+    }
+
+    return ScanGenerateResponse(
+        run_id=run_id,
+        status=result.convergence_status.value,
+        iterations=result.total_iterations,
+        garment_type=garment_type,
+        elapsed_ms=round(result.elapsed_time_ms, 1),
+        scanner_type=scan_result.scanner_type,
+        measurements=dict(scan_result.measurements),
     )
