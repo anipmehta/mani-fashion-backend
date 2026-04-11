@@ -62,6 +62,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Waist circumference (cm) — skirt primary measurement "
              "(use with --garment skirt)",
     )
+    g.add_argument("--scan", type=str, help="Path to JSON scan file")
 
     p.add_argument("--waist", type=float, help="Waist circumference (cm)")
     p.add_argument("--hip", type=float, help="Hip circumference (cm)")
@@ -88,17 +89,102 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Output
     p.add_argument("--output-dir", type=str, default="./output")
 
-    return p.parse_args(argv)
+    ns = p.parse_args(argv)
+    # Track whether --garment was explicitly provided by the user.
+    # argparse doesn't expose this directly, so we check the raw argv.
+    effective_argv = argv if argv is not None else sys.argv[1:]
+    ns._garment_explicit = any(
+        a == "--garment" or a.startswith("--garment=")
+        for a in effective_argv
+    )
+    return ns
 
 
-def _load_profile(args: argparse.Namespace):
+def _load_scan_profile(
+    args: argparse.Namespace,
+) -> tuple[MeasurementProfile | object, str]:
+    """Load a measurement profile from a scanner JSON file.
+
+    Reads the file, parses via AdapterRegistry, prints scan info,
+    determines garment type from hints (or --garment override),
+    and converts to the appropriate profile.
+    """
+    from agentic_pattern_engine.models import SkirtMeasurementProfile
+    from agentic_pattern_engine.scanner import (
+        AdapterRegistry,
+        GarmentHint,
+        scan_result_to_bodice_profile,
+        scan_result_to_skirt_profile,
+    )
+
+    try:
+        raw = pathlib.Path(args.scan).read_text()
+    except FileNotFoundError:
+        print(f"Error: scan file not found: {args.scan}")
+        sys.exit(1)
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"Error: invalid JSON in scan file: {exc}")
+        sys.exit(1)
+
+    try:
+        registry = AdapterRegistry()
+        scan_result = registry.parse(data)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+
+    print(f"Scanner: {scan_result.scanner_type}")
+    print(f"Source unit: {scan_result.source_unit}")
+    print(f"Measurements: {scan_result.measurements}")
+
+    # Determine garment type
+    garment_explicitly_set = getattr(args, "_garment_explicit", False)
+    hints = scan_result.garment_hints
+
+    if garment_explicitly_set:
+        garment_type: str = args.garment
+    elif hints == GarmentHint.BOTH:
+        garment_type = "bodice"
+    elif hints == GarmentHint.BODICE_ONLY:
+        garment_type = "bodice"
+    elif hints == GarmentHint.SKIRT_ONLY:
+        garment_type = "skirt"
+    else:
+        print(
+            "Error: scan has insufficient measurements for "
+            "any garment type"
+        )
+        sys.exit(1)
+
+    try:
+        if garment_type == "skirt":
+            profile = scan_result_to_skirt_profile(scan_result)
+        else:
+            profile = scan_result_to_bodice_profile(scan_result)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+
+    return profile, garment_type
+
+
+def _load_profile(
+    args: argparse.Namespace,
+) -> tuple[MeasurementProfile | object, str]:
     """Load measurement profile based on garment type.
 
-    Returns MeasurementProfile for bodice, SkirtMeasurementProfile
+    Returns (profile, garment_type) where profile is
+    MeasurementProfile for bodice or SkirtMeasurementProfile
     for skirt.  When --profile is used, auto-detects garment type
     from the JSON 'garment_type' field if present.
     """
     from agentic_pattern_engine.models import SkirtMeasurementProfile
+
+    if getattr(args, "scan", None):
+        return _load_scan_profile(args)
 
     if args.profile:
         data = json.loads(pathlib.Path(args.profile).read_text())
