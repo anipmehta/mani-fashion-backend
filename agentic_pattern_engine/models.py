@@ -357,3 +357,35 @@ class SkirtBlock:
     waist_ease: float   # cm
     hip_ease: float     # cm
     metadata: dict
+
+
+# ---------------------------------------------------------------------------
+# Pattern parsing models
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ParseResult:
+    """Result of parsing a DXF/SVG pattern file."""
+
+    pieces: list[PatternPiece]
+    garment_type: str | None       # auto-detected or None
+    source_format: str             # "dxf" or "svg"
+    warnings: list[str]
+    errors: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Grading models
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GradingResult:
+    """Result of pattern grading operation."""
+
+    original_pieces: list[PatternPiece]
+    graded_pieces: list[PatternPiece]
+    deltas: dict[str, float]       # field -> delta in cm
+    run_result: AgentRunResult | None
+    warnings: list[str]
