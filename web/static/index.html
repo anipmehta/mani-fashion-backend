@@ -129,6 +129,7 @@
     <div class="input-mode-tabs">
       <button type="button" id="tab-manual" class="active" onclick="switchMode('manual')">Manual Entry</button>
       <button type="button" id="tab-scan" onclick="switchMode('scan')">Upload Scan</button>
+      <button type="button" id="tab-grade" onclick="switchMode('grade')">Grade Pattern</button>
     </div>
     <form id="form">
       <!-- Scan upload mode -->
@@ -152,6 +153,55 @@
         <div style="margin-top:10px">
           <button type="button" class="btn" id="scan-gen-btn" onclick="generateFromScan()" style="background:#69f0ae;display:none">Generate from Scan</button>
         </div>
+      </div>
+      <!-- Grade pattern mode -->
+      <div id="grade-mode" class="hidden">
+        <div class="scan-upload-area" id="dxf-drop-zone" onclick="document.getElementById('dxf-file').click()">
+          <div class="upload-icon">📐</div>
+          <p>Drop a DXF pattern file here or click to browse</p>
+          <input type="file" id="dxf-file" accept=".dxf" style="display:none" onchange="handleDxfUpload(event)">
+        </div>
+        <div id="dxf-info" class="hidden"></div>
+        <div class="field">
+          <label>Garment Type</label>
+          <select id="grade-garment" onchange="toggleGradeFields()">
+            <option value="bodice">Bodice / Top</option>
+            <option value="skirt">A-Line Skirt</option>
+          </select>
+        </div>
+        <div id="grade-bodice-fields" class="garment-fields">
+          <div class="field">
+            <label>Target Chest (<span class="unit-label">cm</span>)</label>
+            <input type="number" id="grade-chest" step="0.5" value="96.0">
+          </div>
+          <div class="field">
+            <label>Target Shoulder Width (<span class="unit-label">cm</span>)</label>
+            <input type="number" id="grade-shoulder_width" step="0.5" value="42.0">
+          </div>
+          <div class="field">
+            <label>Target Torso Length (<span class="unit-label">cm</span>)</label>
+            <input type="number" id="grade-torso_length" step="0.5" value="44.0">
+          </div>
+        </div>
+        <div class="field">
+          <label>Target Waist (<span class="unit-label">cm</span>)</label>
+          <input type="number" id="grade-waist" step="0.5" value="78.0">
+        </div>
+        <div class="field">
+          <label>Target Hip (<span class="unit-label">cm</span>)</label>
+          <input type="number" id="grade-hip" step="0.5" value="103.0">
+        </div>
+        <div id="grade-skirt-fields" class="garment-fields hidden">
+          <div class="field">
+            <label>Target Hip Depth (<span class="unit-label">cm</span>)</label>
+            <input type="number" id="grade-hip_depth" step="0.5" value="21.0">
+          </div>
+          <div class="field">
+            <label>Target Desired Length (<span class="unit-label">cm</span>)</label>
+            <input type="number" id="grade-desired_length" step="0.5" value="72.0">
+          </div>
+        </div>
+        <button type="button" class="btn" id="grade-btn" onclick="gradePattern()">Grade Pattern</button>
       </div>
       <!-- Manual entry mode -->
       <div id="manual-mode">
@@ -232,8 +282,10 @@ function switchMode(mode) {
   currentMode = mode;
   document.getElementById('tab-manual').classList.toggle('active', mode === 'manual');
   document.getElementById('tab-scan').classList.toggle('active', mode === 'scan');
+  document.getElementById('tab-grade').classList.toggle('active', mode === 'grade');
   document.getElementById('manual-mode').classList.toggle('hidden', mode !== 'manual');
   document.getElementById('scan-mode').classList.toggle('hidden', mode !== 'scan');
+  document.getElementById('grade-mode').classList.toggle('hidden', mode !== 'grade');
 }
 
 // ── Drag and drop ──────────────────────────────────────────────────────
@@ -261,6 +313,104 @@ function readScanFile(file) {
     parseScanData();
   };
   reader.readAsText(file);
+}
+
+// ── DXF drag and drop ──────────────────────────────────────────────────
+const dxfDropZone = document.getElementById('dxf-drop-zone');
+['dragenter','dragover'].forEach(evt => {
+  dxfDropZone.addEventListener(evt, (e) => { e.preventDefault(); dxfDropZone.classList.add('dragover'); });
+});
+['dragleave','drop'].forEach(evt => {
+  dxfDropZone.addEventListener(evt, (e) => { e.preventDefault(); dxfDropZone.classList.remove('dragover'); });
+});
+dxfDropZone.addEventListener('drop', (e) => {
+  const file = e.dataTransfer.files[0];
+  if (file) loadDxfFile(file);
+});
+
+let dxfBase64Content = null;
+
+function handleDxfUpload(e) {
+  const file = e.target.files[0];
+  if (file) loadDxfFile(file);
+}
+
+function loadDxfFile(file) {
+  const info = document.getElementById('dxf-info');
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const bytes = new Uint8Array(e.target.result);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    dxfBase64Content = btoa(binary);
+    info.className = 'scan-info';
+    info.textContent = 'Loaded: ' + file.name + ' (' + (bytes.length / 1024).toFixed(1) + ' KB)';
+    info.classList.remove('hidden');
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function toggleGradeFields() {
+  const g = document.getElementById('grade-garment').value;
+  document.getElementById('grade-bodice-fields').classList.toggle('hidden', g !== 'bodice');
+  document.getElementById('grade-skirt-fields').classList.toggle('hidden', g !== 'skirt');
+}
+
+async function gradePattern() {
+  if (!dxfBase64Content) {
+    alert('Please upload a DXF file first.');
+    return;
+  }
+
+  const btn = document.getElementById('grade-btn');
+  const loading = document.getElementById('loading');
+  const statusArea = document.getElementById('status-area');
+
+  btn.disabled = true;
+  btn.textContent = 'Grading...';
+  loading.classList.remove('hidden');
+  statusArea.classList.add('hidden');
+
+  const g = document.getElementById('grade-garment').value;
+  const u = document.getElementById('units').value;
+  const toCm = (v) => u === 'in' ? v * CM_PER_INCH : v;
+
+  const body = {
+    dxf_content_base64: dxfBase64Content,
+    garment_type: g,
+    waist: toCm(parseFloat(document.getElementById('grade-waist').value)),
+    hip: toCm(parseFloat(document.getElementById('grade-hip').value)),
+  };
+  if (g === 'bodice') {
+    body.chest = toCm(parseFloat(document.getElementById('grade-chest').value));
+    body.shoulder_width = toCm(parseFloat(document.getElementById('grade-shoulder_width').value));
+    body.torso_length = toCm(parseFloat(document.getElementById('grade-torso_length').value));
+  } else {
+    body.hip_depth = toCm(parseFloat(document.getElementById('grade-hip_depth').value));
+    body.desired_length = toCm(parseFloat(document.getElementById('grade-desired_length').value));
+  }
+
+  try {
+    const res = await fetch('/api/grade', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert('Error: ' + (data.detail || JSON.stringify(data)));
+      return;
+    }
+
+    showResult(data);
+  } catch (err) {
+    alert('Network error: ' + err.message);
+  } finally {
+    loading.classList.add('hidden');
+    btn.disabled = false;
+    btn.textContent = 'Grade Pattern';
+  }
 }
 
 // ── Parse scan data ────────────────────────────────────────────────────

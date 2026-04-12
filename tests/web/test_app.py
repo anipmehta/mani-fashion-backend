@@ -228,3 +228,100 @@ def test_web_scan_generate_skirt_produces_visualization() -> None:
     assert viz.status_code == 200
     assert "Visualization not available" not in viz.text
     assert len(viz.text) > 100
+
+
+# ---------------------------------------------------------------------------
+# /api/grade
+# ---------------------------------------------------------------------------
+
+
+def _generate_valid_dxf_base64() -> str:
+    """Generate a valid DXF file via ParsonsSloperGenerator + DXFPatternExporter.
+
+    Returns base64-encoded DXF content.
+    """
+    import base64
+
+    from agentic_pattern_engine.dxf_exporter import DXFPatternExporter
+    from agentic_pattern_engine.models import (
+        ExportMetadata,
+        MeasurementProfile,
+    )
+    from agentic_pattern_engine.sloper_generator import (
+        ParsonsSloperGenerator,
+    )
+
+    profile = MeasurementProfile(
+        chest=91.5,
+        waist=73.5,
+        hip=98.0,
+        shoulder_width=40.0,
+        torso_length=42.5,
+    )
+    generator = ParsonsSloperGenerator()
+    sloper = generator.generate(profile)
+
+    exporter = DXFPatternExporter()
+    metadata = ExportMetadata(
+        profile_hash="test",
+        run_id="test-run",
+        iteration_count=1,
+        convergence_status="converged",
+    )
+    dxf_bytes = exporter.export(sloper, metadata)
+    return base64.b64encode(dxf_bytes).decode("ascii")
+
+
+def test_web_grade_bodice_dxf() -> None:
+    dxf_b64 = _generate_valid_dxf_base64()
+    r = _client.post("/api/grade", json={
+        "dxf_content_base64": dxf_b64,
+        "garment_type": "bodice",
+        "chest": 96.0,
+        "waist": 78.0,
+        "hip": 103.0,
+        "shoulder_width": 42.0,
+        "torso_length": 44.0,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "converged"
+    assert data["garment_type"] == "bodice"
+    assert data["run_id"]
+    assert data["pieces_count"] > 0
+    assert isinstance(data["deltas"], dict)
+    assert isinstance(data["warnings"], list)
+
+
+def test_web_grade_invalid_dxf_returns_400() -> None:
+    import base64
+
+    garbage = base64.b64encode(b"this is not a dxf file").decode("ascii")
+    r = _client.post("/api/grade", json={
+        "dxf_content_base64": garbage,
+        "garment_type": "bodice",
+        "chest": 96.0,
+        "waist": 78.0,
+        "hip": 103.0,
+        "shoulder_width": 42.0,
+        "torso_length": 44.0,
+    })
+    assert r.status_code == 400
+
+
+def test_web_grade_produces_visualization() -> None:
+    dxf_b64 = _generate_valid_dxf_base64()
+    r = _client.post("/api/grade", json={
+        "dxf_content_base64": dxf_b64,
+        "garment_type": "bodice",
+        "chest": 96.0,
+        "waist": 78.0,
+        "hip": 103.0,
+        "shoulder_width": 42.0,
+        "torso_length": 44.0,
+    })
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+    viz = _client.get(f"/api/visualization/{run_id}")
+    assert viz.status_code == 200
+    assert len(viz.text) > 100
