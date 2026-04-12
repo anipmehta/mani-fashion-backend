@@ -75,6 +75,44 @@
   .hidden { display: none; }
   #loading { text-align: center; padding: 40px; color: #666; }
   .garment-fields { transition: all 0.2s; }
+  .input-mode-tabs {
+    display: flex; gap: 0; margin-bottom: 16px; border-radius: 8px;
+    overflow: hidden; border: 1px solid #333;
+  }
+  .input-mode-tabs button {
+    flex: 1; padding: 10px; border: none; background: #0f0f1a;
+    color: #888; font-size: 13px; cursor: pointer;
+    font-weight: 500; transition: all 0.2s;
+  }
+  .input-mode-tabs button.active {
+    background: #4fc3f7; color: #0f0f1a; font-weight: 600;
+  }
+  .scan-upload-area {
+    border: 2px dashed #333; border-radius: 8px; padding: 20px;
+    text-align: center; margin-bottom: 14px; cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  .scan-upload-area:hover, .scan-upload-area.dragover {
+    border-color: #4fc3f7;
+  }
+  .scan-upload-area p { font-size: 13px; color: #888; margin-bottom: 8px; }
+  .scan-upload-area .upload-icon { font-size: 28px; margin-bottom: 8px; }
+  #scan-textarea {
+    width: 100%; min-height: 120px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid #333; background: #0f0f1a; color: #e0e0e0;
+    font-size: 12px; font-family: monospace; resize: vertical;
+    margin-bottom: 14px;
+  }
+  #scan-textarea:focus { outline: none; border-color: #4fc3f7; }
+  .scan-info {
+    padding: 12px; border-radius: 8px; background: #1b5e20;
+    color: #69f0ae; font-size: 13px; margin-bottom: 14px;
+  }
+  .scan-info.error { background: #b71c1c; color: #ff8a80; }
+  .or-divider {
+    text-align: center; color: #555; font-size: 12px;
+    margin: 10px 0; text-transform: uppercase; letter-spacing: 1px;
+  }
   @media (max-width: 800px) {
     .container { grid-template-columns: 1fr; }
   }
@@ -88,7 +126,28 @@
 <div class="container">
   <div class="form-panel">
     <h2>Your Measurements</h2>
+    <div class="input-mode-tabs">
+      <button type="button" id="tab-manual" class="active" onclick="switchMode('manual')">Manual Entry</button>
+      <button type="button" id="tab-scan" onclick="switchMode('scan')">Upload Scan</button>
+    </div>
     <form id="form">
+      <!-- Scan upload mode -->
+      <div id="scan-mode" class="hidden">
+        <div class="scan-upload-area" id="drop-zone" onclick="document.getElementById('scan-file').click()">
+          <div class="upload-icon">📄</div>
+          <p>Drop a scan JSON file here or click to browse</p>
+          <input type="file" id="scan-file" accept=".json" style="display:none" onchange="handleFileUpload(event)">
+        </div>
+        <div class="or-divider">— or paste JSON —</div>
+        <textarea id="scan-textarea" placeholder='{"bust_girth": 88, "waist_girth": 72, "hip_girth": 96, ...}'></textarea>
+        <div id="scan-info" class="hidden"></div>
+        <button type="button" class="btn" id="parse-btn" onclick="parseScanData()">Parse Scan</button>
+        <div style="margin-top:10px">
+          <button type="button" class="btn" id="scan-gen-btn" onclick="generateFromScan()" style="background:#69f0ae;display:none">Generate from Scan</button>
+        </div>
+      </div>
+      <!-- Manual entry mode -->
+      <div id="manual-mode">
       <div class="field">
         <label>Garment Type</label>
         <select id="garment" onchange="toggleFields()">
@@ -136,6 +195,7 @@
         </div>
       </div>
       <button type="submit" class="btn" id="gen-btn">Generate Pattern</button>
+      </div><!-- end manual-mode -->
     </form>
   </div>
   <div class="result-panel">
@@ -156,6 +216,191 @@
   </div>
 </div>
 <script>
+// ── Input mode switching ───────────────────────────────────────────────
+let currentMode = 'manual';
+let parsedScanData = null;
+let parsedScanResult = null;
+
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('tab-manual').classList.toggle('active', mode === 'manual');
+  document.getElementById('tab-scan').classList.toggle('active', mode === 'scan');
+  document.getElementById('manual-mode').classList.toggle('hidden', mode !== 'manual');
+  document.getElementById('scan-mode').classList.toggle('hidden', mode !== 'scan');
+}
+
+// ── Drag and drop ──────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+['dragenter','dragover'].forEach(evt => {
+  dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+});
+['dragleave','drop'].forEach(evt => {
+  dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+});
+dropZone.addEventListener('drop', (e) => {
+  const file = e.dataTransfer.files[0];
+  if (file) readScanFile(file);
+});
+
+function handleFileUpload(e) {
+  const file = e.target.files[0];
+  if (file) readScanFile(file);
+}
+
+function readScanFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    document.getElementById('scan-textarea').value = e.target.result;
+    parseScanData();
+  };
+  reader.readAsText(file);
+}
+
+// ── Parse scan data ────────────────────────────────────────────────────
+async function parseScanData() {
+  const raw = document.getElementById('scan-textarea').value.trim();
+  const info = document.getElementById('scan-info');
+  const scanGenBtn = document.getElementById('scan-gen-btn');
+
+  if (!raw) {
+    info.className = 'scan-info error';
+    info.textContent = 'Please paste or upload scan JSON first.';
+    info.classList.remove('hidden');
+    scanGenBtn.style.display = 'none';
+    return;
+  }
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    info.className = 'scan-info error';
+    info.textContent = 'Invalid JSON: ' + err.message;
+    info.classList.remove('hidden');
+    scanGenBtn.style.display = 'none';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/scan/upload', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ scan_data: data, output_unit: document.getElementById('units').value }),
+    });
+    const result = await res.json();
+
+    if (!res.ok) {
+      info.className = 'scan-info error';
+      info.textContent = 'Error: ' + (result.detail || JSON.stringify(result));
+      info.classList.remove('hidden');
+      scanGenBtn.style.display = 'none';
+      return;
+    }
+
+    parsedScanData = data;
+    parsedScanResult = result;
+
+    const unit = document.getElementById('units').value === 'in' ? 'in' : 'cm';
+    const m = result.measurements;
+    let fields = Object.entries(m).map(([k,v]) => `${k}: ${v.toFixed(1)} ${unit}`).join(', ');
+
+    info.className = 'scan-info';
+    info.innerHTML = `
+      <strong>Scanner:</strong> ${result.scanner_type} &nbsp;|&nbsp;
+      <strong>Supports:</strong> ${result.garment_hints.replace('_',' ')}<br>
+      <span style="font-size:11px;color:#a5d6a7">${fields}</span>
+    `;
+    info.classList.remove('hidden');
+    scanGenBtn.style.display = 'block';
+
+  } catch (err) {
+    info.className = 'scan-info error';
+    info.textContent = 'Network error: ' + err.message;
+    info.classList.remove('hidden');
+    scanGenBtn.style.display = 'none';
+  }
+}
+
+// ── Generate from scan ─────────────────────────────────────────────────
+async function generateFromScan() {
+  if (!parsedScanData) return;
+
+  const btn = document.getElementById('scan-gen-btn');
+  const loading = document.getElementById('loading');
+  const statusArea = document.getElementById('status-area');
+
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  loading.classList.remove('hidden');
+  statusArea.classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/scan/generate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ scan_data: parsedScanData }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      alert('Error: ' + (data.detail || JSON.stringify(data)));
+      return;
+    }
+
+    showResult(data);
+  } catch (err) {
+    alert('Network error: ' + err.message);
+  } finally {
+    loading.classList.add('hidden');
+    btn.disabled = false;
+    btn.textContent = 'Generate from Scan';
+  }
+}
+
+// ── Shared result display ──────────────────────────────────────────────
+function showResult(data) {
+  const statusArea = document.getElementById('status-area');
+  const sStatus = document.getElementById('s-status');
+  sStatus.textContent = data.status;
+  sStatus.className = 'tag ' + (data.status === 'converged' ? 'ok' : 'err');
+  document.getElementById('s-iters').textContent = data.iterations + ' iterations';
+  document.getElementById('s-time').textContent = data.elapsed_ms + ' ms';
+  document.getElementById('s-garment').textContent = data.garment_type;
+  statusArea.classList.remove('hidden');
+
+  const dl = document.getElementById('downloads');
+  dl.innerHTML = '';
+  if (data.garment_type === 'bodice') {
+    dl.innerHTML += `<a href="/api/download/${data.run_id}/dxf" download="pattern_${data.run_id}.dxf">⬇ Download DXF</a>`;
+    dl.innerHTML += `<a href="/api/download/${data.run_id}/pdf" download="pattern_${data.run_id}.pdf">⬇ Download PDF</a>`;
+  }
+
+  const vizBtn = document.createElement('a');
+  vizBtn.href = `/api/visualization/${data.run_id}`;
+  vizBtn.target = '_blank';
+  vizBtn.className = 'btn';
+  vizBtn.style.cssText = 'display:inline-block;width:auto;margin-top:12px;text-decoration:none;text-align:center;';
+  vizBtn.textContent = '🔍 Open 3D Visualization';
+
+  const vizArea = document.getElementById('viz-area');
+  vizArea.innerHTML = '';
+  vizArea.appendChild(vizBtn);
+
+  const summary = document.createElement('div');
+  summary.style.cssText = 'margin-top:16px;padding:16px;background:#0f0f1a;border-radius:8px;font-size:13px;color:#aaa;';
+  const scannerLine = data.scanner_type ? `<p>Scanner: ${data.scanner_type}</p>` : '';
+  summary.innerHTML = `
+    <p style="color:#4fc3f7;font-size:15px;margin-bottom:8px">Pattern generated successfully</p>
+    <p>Status: <span style="color:#69f0ae">${data.status}</span></p>
+    <p>Self-correction iterations: ${data.iterations}</p>
+    <p>Garment: ${data.garment_type}</p>
+    ${scannerLine}
+    <p>Engine time: ${data.elapsed_ms}ms</p>
+  `;
+  vizArea.appendChild(summary);
+}
+
+// ── Manual entry fields ────────────────────────────────────────────────
 function toggleFields() {
   const g = document.getElementById('garment').value;
   document.getElementById('bodice-fields').classList.toggle('hidden', g !== 'bodice');
@@ -219,52 +464,7 @@ document.getElementById('form').addEventListener('submit', async (e) => {
       return;
     }
 
-    // Update status
-    const sStatus = document.getElementById('s-status');
-    sStatus.textContent = data.status;
-    sStatus.className = 'tag ' + (data.status === 'converged' ? 'ok' : 'err');
-    document.getElementById('s-iters').textContent = data.iterations + ' iterations';
-    document.getElementById('s-time').textContent = data.elapsed_ms + ' ms';
-    document.getElementById('s-garment').textContent = data.garment_type;
-    statusArea.classList.remove('hidden');
-
-    // Downloads — only show if available
-    const dl = document.getElementById('downloads');
-    dl.innerHTML = '';
-    if (data.garment_type === 'bodice') {
-      dl.innerHTML += `<a href="/api/download/${data.run_id}/dxf" download="pattern_${data.run_id}.dxf">⬇ Download DXF</a>`;
-      dl.innerHTML += `<a href="/api/download/${data.run_id}/pdf" download="pattern_${data.run_id}.pdf">⬇ Download PDF</a>`;
-    }
-
-    // Load visualization — open in new tab for full 3D experience
-    const vizBtn = document.createElement('a');
-    vizBtn.href = `/api/visualization/${data.run_id}`;
-    vizBtn.target = '_blank';
-    vizBtn.className = 'btn';
-    vizBtn.style.display = 'inline-block';
-    vizBtn.style.width = 'auto';
-    vizBtn.style.marginTop = '12px';
-    vizBtn.style.textDecoration = 'none';
-    vizBtn.style.textAlign = 'center';
-    vizBtn.textContent = '🔍 Open 3D Visualization';
-
-    const vizArea = document.getElementById('viz-area');
-    vizArea.innerHTML = '';
-    vizArea.appendChild(vizBtn);
-
-    // Also show a summary
-    const summary = document.createElement('div');
-    summary.style.cssText = 'margin-top:16px;padding:16px;background:#0f0f1a;border-radius:8px;font-size:13px;color:#aaa;';
-    summary.innerHTML = `
-      <p style="color:#4fc3f7;font-size:15px;margin-bottom:8px">Pattern generated successfully</p>
-      <p>Status: <span style="color:#69f0ae">${data.status}</span></p>
-      <p>Self-correction iterations: ${data.iterations}</p>
-      <p>Garment: ${data.garment_type}</p>
-      <p>Engine time: ${data.elapsed_ms}ms</p>
-      <p style="margin-top:12px;color:#666">Click "Open 3D Visualization" to see the pattern draped on a mannequin with the iteration slider.</p>
-    `;
-    vizArea.appendChild(summary);
-
+    showResult(data);
     loading.classList.add('hidden');
 
   } catch (err) {
