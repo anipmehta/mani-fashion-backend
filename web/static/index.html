@@ -141,6 +141,13 @@
         <div class="or-divider">— or paste JSON —</div>
         <textarea id="scan-textarea" placeholder='{"bust_girth": 88, "waist_girth": 72, "hip_girth": 96, ...}'></textarea>
         <div id="scan-info" class="hidden"></div>
+        <div id="scan-garment-wrap" class="field hidden">
+          <label>Generate as</label>
+          <select id="scan-garment">
+            <option value="bodice">Bodice / Top</option>
+            <option value="skirt">A-Line Skirt</option>
+          </select>
+        </div>
         <button type="button" class="btn" id="parse-btn" onclick="parseScanData()">Parse Scan</button>
         <div style="margin-top:10px">
           <button type="button" class="btn" id="scan-gen-btn" onclick="generateFromScan()" style="background:#69f0ae;display:none">Generate from Scan</button>
@@ -313,6 +320,16 @@ async function parseScanData() {
     info.classList.remove('hidden');
     scanGenBtn.style.display = 'block';
 
+    // Show garment selector when scan supports both
+    const scanGarmentWrap = document.getElementById('scan-garment-wrap');
+    if (result.garment_hints === 'both') {
+      scanGarmentWrap.classList.remove('hidden');
+    } else {
+      scanGarmentWrap.classList.add('hidden');
+      document.getElementById('scan-garment').value =
+        result.garment_hints === 'skirt_only' ? 'skirt' : 'bodice';
+    }
+
   } catch (err) {
     info.className = 'scan-info error';
     info.textContent = 'Network error: ' + err.message;
@@ -338,7 +355,10 @@ async function generateFromScan() {
     const res = await fetch('/api/scan/generate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ scan_data: parsedScanData }),
+      body: JSON.stringify({
+        scan_data: parsedScanData,
+        garment_type: document.getElementById('scan-garment').value,
+      }),
     });
     const data = await res.json();
 
