@@ -105,3 +105,40 @@ def test_scan_generate_invalid_data_returns_400() -> None:
         "scan_data": {"unknown_field": 999},
     })
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# /api/scan/generate — visualization tests
+# ---------------------------------------------------------------------------
+
+
+def test_scan_generate_bodice_produces_visualization() -> None:
+    """scan/generate for bodice should store viz_html so /visualization works."""
+    data = _load_fixture("3dlook_full_body.json")
+    r = _client.post("/api/scan/generate", json={
+        "scan_data": data,
+        "garment_type": "bodice",
+    })
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+
+    viz = _client.get(f"/api/visualization/{run_id}")
+    assert viz.status_code == 200
+    assert "Visualization not available" not in viz.text
+    assert len(viz.text) > 100  # real HTML, not the fallback
+
+
+def test_scan_generate_skirt_produces_visualization() -> None:
+    """scan/generate for skirt should store viz_html so /visualization works."""
+    data = _load_fixture("3dlook_full_body.json")
+    r = _client.post("/api/scan/generate", json={
+        "scan_data": data,
+        "garment_type": "skirt",
+    })
+    assert r.status_code == 200
+    run_id = r.json()["run_id"]
+
+    viz = _client.get(f"/api/visualization/{run_id}")
+    assert viz.status_code == 200
+    assert "Visualization not available" not in viz.text
+    assert len(viz.text) > 100

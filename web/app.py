@@ -38,6 +38,10 @@ from agentic_pattern_engine.units import cm_to_inches
 
 app = FastAPI(title="MANI Pattern Engine")
 
+# ── Garment type constants ──────────────────────────────────────────────
+GARMENT_BODICE: str = "bodice"
+GARMENT_SKIRT: str = "skirt"
+
 # Serve static files (HTML frontend)
 import pathlib
 _STATIC_DIR = pathlib.Path(__file__).parent / "static"
@@ -54,7 +58,7 @@ _runs: dict[str, Any] = {}
 
 
 class GenerateRequest(BaseModel):
-    garment_type: str = "bodice"
+    garment_type: str = GARMENT_BODICE
     chest: float | None = None
     waist: float
     hip: float
@@ -78,7 +82,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
     """Run the pattern engine and store results."""
     errors: list[str] = []
 
-    if req.garment_type == "skirt":
+    if req.garment_type == GARMENT_SKIRT:
         if not req.hip_depth or not req.desired_length:
             raise HTTPException(
                 400,
@@ -113,7 +117,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
 
     # Generate visualization HTML
     viz_html = None
-    if req.garment_type == "bodice":
+    if req.garment_type == GARMENT_BODICE:
         try:
             from agentic_pattern_engine.body_model_builder import (
                 ParametricBodyModelBuilder,
@@ -128,7 +132,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
             )
         except Exception:
             pass
-    elif req.garment_type == "skirt":
+    elif req.garment_type == GARMENT_SKIRT:
         try:
             from agentic_pattern_engine.skirt_visualizer import (
                 generate_skirt_visualization,
@@ -277,9 +281,9 @@ def scan_generate(req: ScanGenerateRequest) -> ScanGenerateResponse:
     else:
         hint = scan_result.garment_hints
         if hint in (GarmentHint.BOTH, GarmentHint.BODICE_ONLY):
-            garment_type = "bodice"
+            garment_type = GARMENT_BODICE
         elif hint == GarmentHint.SKIRT_ONLY:
-            garment_type = "skirt"
+            garment_type = GARMENT_SKIRT
         else:
             raise HTTPException(
                 400,
@@ -288,7 +292,7 @@ def scan_generate(req: ScanGenerateRequest) -> ScanGenerateResponse:
 
     # Convert to profile and select spec
     try:
-        if garment_type == "skirt":
+        if garment_type == GARMENT_SKIRT:
             profile = scan_result_to_skirt_profile(scan_result)
             spec = SkirtGarmentSpec()
         else:
@@ -304,7 +308,7 @@ def scan_generate(req: ScanGenerateRequest) -> ScanGenerateResponse:
 
     # Generate visualization HTML (same logic as /api/generate)
     viz_html = None
-    if garment_type == "bodice":
+    if garment_type == GARMENT_BODICE:
         try:
             from agentic_pattern_engine.body_model_builder import (
                 ParametricBodyModelBuilder,
@@ -319,7 +323,7 @@ def scan_generate(req: ScanGenerateRequest) -> ScanGenerateResponse:
             )
         except Exception:
             pass
-    elif garment_type == "skirt":
+    elif garment_type == GARMENT_SKIRT:
         try:
             from agentic_pattern_engine.skirt_visualizer import (
                 generate_skirt_visualization,
