@@ -301,11 +301,41 @@ def scan_generate(req: ScanGenerateRequest) -> ScanGenerateResponse:
     result = orch.run(profile, AgentConfig(iteration_limit=20))
 
     run_id = str(uuid.uuid4())[:8]
+
+    # Generate visualization HTML (same logic as /api/generate)
+    viz_html = None
+    if garment_type == "bodice":
+        try:
+            from agentic_pattern_engine.body_model_builder import (
+                ParametricBodyModelBuilder,
+            )
+            from agentic_pattern_engine.html_visualizer import (
+                generate_visualization,
+            )
+
+            bm = ParametricBodyModelBuilder().build(profile)
+            viz_html = generate_visualization(
+                bm, result.audit_trail,
+            )
+        except Exception:
+            pass
+    elif garment_type == "skirt":
+        try:
+            from agentic_pattern_engine.skirt_visualizer import (
+                generate_skirt_visualization,
+            )
+
+            viz_html = generate_skirt_visualization(
+                profile, result.audit_trail,
+            )
+        except Exception:
+            pass
+
     _runs[run_id] = {
         "result": result,
         "profile": profile,
         "garment_type": garment_type,
-        "viz_html": None,
+        "viz_html": viz_html,
     }
 
     return ScanGenerateResponse(
