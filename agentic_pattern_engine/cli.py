@@ -50,8 +50,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Garment type: bodice (default) or skirt",
     )
 
+    # Grading mode
+    p.add_argument(
+        "--grade", type=str, default=None, metavar="PATTERN_FILE",
+        help="Path to a DXF or SVG pattern file to re-grade",
+    )
+
     # Measurement inputs (direct or JSON file)
-    g = p.add_mutually_exclusive_group(required=True)
+    g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--profile", type=str, help="Path to JSON measurement file")
     g.add_argument(
         "--chest", type=float,
@@ -97,6 +103,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         a == "--garment" or a.startswith("--garment=")
         for a in effective_argv
     )
+
+    # When not grading, require at least one measurement source
+    if not ns.grade:
+        has_measurements = (
+            ns.profile or ns.chest or ns.waist_primary
+            or getattr(ns, "scan", None)
+        )
+        if not has_measurements:
+            p.error(
+                "one of --profile, --chest, --waist-primary, "
+                "--scan is required (or use --grade)"
+            )
+
     return ns
 
 
@@ -280,8 +299,137 @@ def _print_audit_trail(result) -> None:
     print("=" * 70)
 
 
+def _run_grade_mode(args: argparse.Namespace) -> int:
+    """Execute --grade mode: parse pattern, grade to target, export."""
+    from agentic_pattern_engine.grading_engine import GradingEngine
+    from agentic_pattern_engine.pattern_parser import (
+        SUPPORTED_FORMATS,
+        PatternParser,
+    )
+
+    parser = PatternParser()
+    parse_result = parser.parse(args.grade)
+
+    if parse_result.errors:
+        for err in parse_result.errors:
+            print(f"Error: {err}")
+        if "Unrecognized format" in parse_result.errors[0]:
+            print(
+                f"Supported formats: "
+                f"{', '.join(sorted(SUPPORTED_FORMATS))}"
+            )
+        return 1
+
+    # Require target measurements
+    has_target = (
+        args.profile or args.chest or args.waist_primary
+        or getattr(args, "scan", None)
+    )
+    if not has_target:
+        print(
+            "Error: target measurements required for grading. "
+            "Use --chest/--waist/etc. or --profile."
+        )
+        return 1
+
+    target_profile, garment_type = _load_profile(args)
+
+    # Use detected garment type from pattern if not explicit
+    garment_explicit = getattr(args, "_garment_explicit", False)
+    if not garment_explicit and parse_result.garment_type:
+        garment_type = parse_result.garment_type
+
+    # Build source profile from parsed pattern metadata
+    # For DXF round-trip, the exporter stores profile in metadata
+    source_profile = target_profile  # fallback
+
+    # Build orchestrator with appropriate garment spec
+    garment_spec = None
+    if garment_type == "skirt":
+        from agentic_pattern_engine.skirt_generator import (
+            SkirtGarmentSpec,
+        )
+        garment_spec = SkirtGarmentSpec()
+
+    orchestrator = AgentOrchestrator(garment_spec=garment_spec)
+    engine = GradingEngine(orchestrator=orchestrator)
+
+    print(f"Grading pattern: {args.grade}")
+    print(f"  Source format: {parse_result.source_format}")
+    print(f"  Pieces found: {len(parse_result.pieces)}")
+    print(f"  Garment type: {garment_type}")
+    print()
+
+    result = engine.grade(
+        parse_result.pieces,
+        source_profile,
+        target_profile,
+        garment_type,
+    )
+
+    # Print grading summary
+    _print_grading_summary(result, garment_type, target_profile)
+
+    # Print warnings
+    for warning in result.warnings:
+        print(f"Warning: {warning}")
+
+    # Verbose: print audit trail from self-correction
+    if args.verbose and result.run_result is not None:
+        _print_audit_trail(result.run_result)
+
+    # Export re-graded pattern
+    out = pathlib.Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    if result.run_result and result.run_result.dxf_bytes:
+        dxf_path = out / "graded_pattern.dxf"
+        dxf_path.write_bytes(result.run_result.dxf_bytes)
+        print(f"DXF: {dxf_path}")
+
+    if result.run_result and result.run_result.pdf_bytes:
+        pdf_path = out / "graded_pattern.pdf"
+        pdf_path.write_bytes(result.run_result.pdf_bytes)
+        print(f"PDF: {pdf_path}")
+
+    return 0
+
+
+def _print_grading_summary(
+    result: "GradingResult",
+    garment_type: str,
+    target_profile: MeasurementProfile,
+) -> None:
+    """Print grading summary: deltas, convergence, dimensions."""
+    from agentic_pattern_engine.models import GradingResult
+
+    print("=" * 60)
+    print("GRADING SUMMARY")
+    print("=" * 60)
+
+    print(f"\nDeltas (target - source):")
+    for field, delta in result.deltas.items():
+        print(f"  {field}: {delta:+.2f} cm")
+
+    if result.run_result is not None:
+        status = result.run_result.convergence_status.value
+        iters = result.run_result.total_iterations
+        elapsed = result.run_result.elapsed_time_ms
+        print(f"\nSelf-correction: {status}")
+        print(f"  Iterations: {iters}")
+        print(f"  Time: {elapsed:.1f} ms")
+
+    print(f"\nGraded pieces: {len(result.graded_pieces)}")
+    print("=" * 60)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    # --- Grading mode ---
+    if args.grade:
+        return _run_grade_mode(args)
+
     profile, garment_type = _load_profile(args)
 
     # Build thresholds — tight mode uses very low values
