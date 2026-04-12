@@ -194,6 +194,7 @@ class GradeResponse(BaseModel):
     deltas: dict[str, float]
     warnings: list[str]
     pieces_count: int
+    detected_garment_type: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +268,17 @@ def grade(req: GradeRequest) -> GradeResponse:
 
     if not parse_result.pieces:
         raise HTTPException(400, detail="No pattern pieces found in DXF")
+
+    # Auto-detect garment type from parsed pieces and block mismatches
+    detected_garment_type = parse_result.garment_type
+    if detected_garment_type and detected_garment_type != req.garment_type:
+        raise HTTPException(
+            400,
+            detail=(
+                f"Uploaded pattern is a {detected_garment_type} pattern "
+                f"but {req.garment_type} grading was requested"
+            ),
+        )
 
     # Build target profile
     target_profile = _build_target_profile(req)
@@ -365,6 +377,7 @@ def grade(req: GradeRequest) -> GradeResponse:
         deltas=grading_result.deltas,
         warnings=grading_result.warnings,
         pieces_count=len(grading_result.graded_pieces),
+        detected_garment_type=detected_garment_type,
     )
 
 

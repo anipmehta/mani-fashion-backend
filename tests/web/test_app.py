@@ -325,3 +325,37 @@ def test_web_grade_produces_visualization() -> None:
     viz = _client.get(f"/api/visualization/{run_id}")
     assert viz.status_code == 200
     assert len(viz.text) > 100
+
+
+def test_web_grade_returns_detected_garment_type() -> None:
+    """GradeResponse includes detected_garment_type from parsed DXF."""
+    dxf_b64 = _generate_valid_dxf_base64()
+    r = _client.post("/api/grade", json={
+        "dxf_content_base64": dxf_b64,
+        "garment_type": "bodice",
+        "chest": 96.0,
+        "waist": 78.0,
+        "hip": 103.0,
+        "shoulder_width": 42.0,
+        "torso_length": 44.0,
+    })
+    assert r.status_code == 200
+    data = r.json()
+    assert data["detected_garment_type"] == "bodice"
+
+
+def test_web_grade_garment_type_mismatch_returns_400() -> None:
+    """Requesting skirt grading on a bodice DXF returns HTTP 400."""
+    dxf_b64 = _generate_valid_dxf_base64()
+    r = _client.post("/api/grade", json={
+        "dxf_content_base64": dxf_b64,
+        "garment_type": "skirt",
+        "waist": 78.0,
+        "hip": 103.0,
+        "hip_depth": 21.0,
+        "desired_length": 72.0,
+    })
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "bodice" in detail.lower()
+    assert "skirt" in detail.lower()

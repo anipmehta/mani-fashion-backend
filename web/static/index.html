@@ -329,6 +329,7 @@ dxfDropZone.addEventListener('drop', (e) => {
 });
 
 let dxfBase64Content = null;
+let detectedGarmentType = null;
 
 function handleDxfUpload(e) {
   const file = e.target.files[0];
@@ -343,8 +344,26 @@ function loadDxfFile(file) {
     let binary = '';
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
     dxfBase64Content = btoa(binary);
+
+    // Auto-detect garment type from DXF text content
+    const textContent = new TextDecoder('utf-8', {fatal: false}).decode(bytes);
+    detectedGarmentType = null;
+    if (/front_bodice|back_bodice/i.test(textContent)) {
+      detectedGarmentType = 'bodice';
+    } else if (/front_skirt|back_skirt/i.test(textContent)) {
+      detectedGarmentType = 'skirt';
+    }
+
+    let infoText = 'Loaded: ' + file.name + ' (' + (bytes.length / 1024).toFixed(1) + ' KB)';
+    if (detectedGarmentType) {
+      const label = detectedGarmentType.charAt(0).toUpperCase() + detectedGarmentType.slice(1);
+      infoText += ' — Detected: ' + label;
+      document.getElementById('grade-garment').value = detectedGarmentType;
+      toggleGradeFields();
+    }
+
     info.className = 'scan-info';
-    info.textContent = 'Loaded: ' + file.name + ' (' + (bytes.length / 1024).toFixed(1) + ' KB)';
+    info.textContent = infoText;
     info.classList.remove('hidden');
   };
   reader.readAsArrayBuffer(file);
@@ -354,6 +373,26 @@ function toggleGradeFields() {
   const g = document.getElementById('grade-garment').value;
   document.getElementById('grade-bodice-fields').classList.toggle('hidden', g !== 'bodice');
   document.getElementById('grade-skirt-fields').classList.toggle('hidden', g !== 'skirt');
+
+  // Warn if user selection doesn't match detected garment type
+  const info = document.getElementById('dxf-info');
+  if (detectedGarmentType && g !== detectedGarmentType && dxfBase64Content) {
+    const label = detectedGarmentType.charAt(0).toUpperCase() + detectedGarmentType.slice(1);
+    const existing = info.textContent.split(' — ')[0];
+    info.className = 'scan-info error';
+    info.textContent = existing + ' — Warning: pattern is ' + label + ' but ' + g + ' selected';
+    info.classList.remove('hidden');
+  } else if (dxfBase64Content) {
+    // Restore normal info text
+    const existing = info.textContent.split(' — ')[0];
+    info.className = 'scan-info';
+    if (detectedGarmentType) {
+      const label = detectedGarmentType.charAt(0).toUpperCase() + detectedGarmentType.slice(1);
+      info.textContent = existing + ' — Detected: ' + label;
+    } else {
+      info.textContent = existing;
+    }
+  }
 }
 
 async function gradePattern() {
@@ -401,6 +440,17 @@ async function gradePattern() {
     if (!res.ok) {
       alert('Error: ' + (data.detail || JSON.stringify(data)));
       return;
+    }
+
+    // Show detected garment type from backend response
+    if (data.detected_garment_type) {
+      const info = document.getElementById('dxf-info');
+      if (info && !info.classList.contains('hidden')) {
+        const existing = info.textContent.split(' — ')[0];
+        const label = data.detected_garment_type.charAt(0).toUpperCase() + data.detected_garment_type.slice(1);
+        info.className = 'scan-info';
+        info.textContent = existing + ' — Detected: ' + label;
+      }
     }
 
     showResult(data);
