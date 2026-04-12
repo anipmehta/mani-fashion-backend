@@ -1,17 +1,9 @@
-"""Scanner data models: ScanResult and GarmentHint."""
+"""ScanResult — immutable container for parsed scan data."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 
-
-class GarmentHint(Enum):
-    """Indicates which garment types a scan's measurements can support."""
-
-    BODICE_ONLY = "bodice_only"
-    SKIRT_ONLY = "skirt_only"
-    BOTH = "both"
-    INSUFFICIENT = "insufficient"
+from agentic_pattern_engine.scanner.models.garment_hint import GarmentHint
 
 
 @dataclass(frozen=True)

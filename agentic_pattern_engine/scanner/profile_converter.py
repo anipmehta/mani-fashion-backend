@@ -7,12 +7,22 @@ from agentic_pattern_engine.models import (
 )
 from agentic_pattern_engine.scanner.models import GarmentHint, ScanResult
 
+# ── Field name constants ────────────────────────────────────────────────
+FIELD_CHEST: str = "chest"
+FIELD_WAIST: str = "waist"
+FIELD_HIP: str = "hip"
+FIELD_SHOULDER_WIDTH: str = "shoulder_width"
+FIELD_TORSO_LENGTH: str = "torso_length"
+FIELD_HIP_DEPTH: str = "hip_depth"
+FIELD_DESIRED_LENGTH: str = "desired_length"
+
 # Required fields for each garment type
 BODICE_REQUIRED: frozenset[str] = frozenset({
-    "chest", "waist", "hip", "shoulder_width", "torso_length",
+    FIELD_CHEST, FIELD_WAIST, FIELD_HIP, FIELD_SHOULDER_WIDTH,
+    FIELD_TORSO_LENGTH,
 })
 SKIRT_REQUIRED: frozenset[str] = frozenset({
-    "waist", "hip", "hip_depth", "desired_length",
+    FIELD_WAIST, FIELD_HIP, FIELD_HIP_DEPTH, FIELD_DESIRED_LENGTH,
 })
 
 # Garment hints that are incompatible with each conversion direction
@@ -48,11 +58,11 @@ def scan_result_to_bodice_profile(
         )
 
     profile = MeasurementProfile(
-        chest=result.measurements["chest"],
-        waist=result.measurements["waist"],
-        hip=result.measurements["hip"],
-        shoulder_width=result.measurements["shoulder_width"],
-        torso_length=result.measurements["torso_length"],
+        chest=result.measurements[FIELD_CHEST],
+        waist=result.measurements[FIELD_WAIST],
+        hip=result.measurements[FIELD_HIP],
+        shoulder_width=result.measurements[FIELD_SHOULDER_WIDTH],
+        torso_length=result.measurements[FIELD_TORSO_LENGTH],
     )
 
     errors = profile.validate()
@@ -85,10 +95,10 @@ def scan_result_to_skirt_profile(
         )
 
     profile = SkirtMeasurementProfile(
-        waist=result.measurements["waist"],
-        hip=result.measurements["hip"],
-        hip_depth=result.measurements["hip_depth"],
-        desired_length=result.measurements["desired_length"],
+        waist=result.measurements[FIELD_WAIST],
+        hip=result.measurements[FIELD_HIP],
+        hip_depth=result.measurements[FIELD_HIP_DEPTH],
+        desired_length=result.measurements[FIELD_DESIRED_LENGTH],
     )
 
     errors = profile.validate()
